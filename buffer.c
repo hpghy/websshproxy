@@ -110,7 +110,7 @@ size_t buffer_size(struct buffer_s *buffptr)
  * Push a new line on to the end of the buffer.
  */
 int
-add_to_buffer(struct buffer_s *buffptr, char *data, size_t length)
+add_to_buffer(struct buffer_s *buffptr, unsigned char *data, size_t length)
 {
 	struct bufline_s *newline;
 
@@ -130,7 +130,7 @@ add_to_buffer(struct buffer_s *buffptr, char *data, size_t length)
 	/*
 	 * Make a new line so we can add it to the buffer.
 	 */
-	if (!(newline = makenewline(data, length)))
+	if ( NULL == (newline = makenewline((unsigned char*)data, length)) )
 		return -1;
 
 	if (buffptr->size == 0)
@@ -187,7 +187,7 @@ read_buffer(int fd, struct buffer_s * buffptr)
 		return 0;
 	total = 0;
 
-NONREAD:
+//NONREAD:
 	bytesin = read(fd, buffer, READ_BUFFER_SIZE);
 
 	if (bytesin > 0) {
@@ -254,7 +254,7 @@ write_buffer(int fd, struct buffer_s * buffptr)
 		return 0;
 	total = 0;
 
-NONWRITE:
+//NONWRITE:
 	/* Sanity check. It would be bad to be using a NULL pointer! */
 	assert(BUFFER_HEAD(buffptr) != NULL);
 	line = BUFFER_HEAD(buffptr);
@@ -326,16 +326,16 @@ int extract_ip_buffer( struct buffer_s *bufferptr, char *ip, ssize_t length, uin
 	// 2kb size, i think it's enough to contain a http request
 	// test!
 	lines = BUFFER_TAIL( bufferptr );
-	pGet = strstr( lines->string, "GET" );
+	pGet = strstr( (char*)lines->string, "GET" );
 	if ( NULL == pGet ) {
-		pPost = strstr( lines->string, "POST" );
+		pPost = strstr( (char*)lines->string, "POST" );
 		if ( NULL == pPost ) {
 			return -1;
 		}
 		pGet = pPost;
 	}
 
-	pHttp = strstr( lines->string, "HTTP" );
+	pHttp = strstr( (char*)lines->string, "HTTP" );
 	if ( NULL == pHttp ) {
 		return -1;
 	} 
@@ -362,7 +362,7 @@ int extract_ip_buffer( struct buffer_s *bufferptr, char *ip, ssize_t length, uin
 	if ( *q == '/' )
 		++ n;
 	start = (unsigned char*)p - lines->string + 1;
-	strremove( lines->string, start, n, lines->length );
+	strremove( (char*)lines->string, start, n, lines->length );
 	lines->length -= n;
 	bufferptr->size -= n;
 	//fprintf( stderr, "after: bytes:%d,%s\n", lines->length, lines->string );

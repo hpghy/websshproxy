@@ -57,10 +57,6 @@ static void worker_signal( int signo )
 	exit(0);
 }
 
-static void display_license()
-{
-}
-
 /*
  * work process main loop
  *
