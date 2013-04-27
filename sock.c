@@ -67,20 +67,17 @@ int open_listening_sockets( config_t *pconfig )
 		else { //ipv4
 			fd = socket( AF_INET, SOCK_STREAM, 0 );
 			if ( fd < 0 ) {
-				//fprintf( stderr, "socket:%s error.\n", pconfig->ips[i] );
 				log_message( LOG_ERROR, "socket error:%s.", strerror(errno) );
 				return -1;
 			}
 	
 			if ( setsockopt( fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(int) ) < 0 ) {
-				//fprintf( stderr, "setsockopt REUSEADDR error.\n" );
 				log_message( LOG_ERROR, "setsockopt SO_REUSEADDR error:%s.", strerror(errno) );
 				close( fd );
 				return -1;
 			}
 				
 			if ( socket_nonblocking(fd) < 0 ) {
-				//fprintf( stderr, "socket_nonblocking errro.\n" );
 				log_message( LOG_ERROR, "socket_nonblocking error." );
 				close( fd );
 				return -1;
@@ -90,28 +87,24 @@ int open_listening_sockets( config_t *pconfig )
 			addr.sin_family = AF_INET;
 			addr.sin_port = htons( SHELLINABOXPORT );
 			if ( inet_pton( AF_INET, pconfig->ips[i], &addr.sin_addr ) < 1 ) {
-				//fprintf( stderr, "inet_pton error.\n");
 				log_message( LOG_ERROR, "inet_pton %s error:%s.", pconfig->ips[i], strerror(errno) );
 				close( fd );
 				return -1;
 			}
 
 			if ( bind( fd, (struct sockaddr*)&addr, sizeof(addr) ) < 0 ) {
-				//fprintf( stderr, "bind error.\n" );
 				log_message( LOG_ERROR, "bind error:%s.", strerror(errno) );
 				close( fd );
 				return -1;
 			}
 
 			if ( listen( fd, MAXLISTEN ) < 0 ) {
-				//fprintf( stderr, "listen error.\n" );
 				log_message( LOG_ERROR, "listen error:%s.", strerror(errno) );
 				close( fd );
 				return -1;
 			}
 			listenfds[i].fd = fd;
-			//fprintf( stderr, "create listen fd:%d\n", fd );
-			log_message( LOG_NOTICE, "create listen socket:%s", pconfig->ips[i] );
+			log_message( LOG_NOTICE, "create listen socket:[%s:%d]", pconfig->ips[i], SHELLINABOXPORT );
 
 			listenfds[i].addr = (struct sockaddr*)safemalloc( sizeof(addr) );
 			memcpy( listenfds[i].addr, &addr, sizeof(addr) ); 
@@ -126,7 +119,6 @@ void close_listen_sockets()
 	int i;
 	for ( i = 0; i < listenfd_cnt; ++ i ) {
 		close( listenfds[i].fd );
-		//fprintf( stderr, "close fd:%d\n", listenfds[i].fd );
 		log_message( LOG_WARNING, "close socket %s error.", listenfds[i].fd );
 	}
 }
@@ -149,22 +141,24 @@ int init_conns_array( int epfd )
 	for ( i = 0; i < MAXCONNSLOTS; ++ i ) {
 		conns[i].read_buffer = NULL;
 		conns[i].write_buffer = NULL;
+		conns[i].read_closed = conns[i].write_closed = 0;
 	}
 
 	for ( i = 0; i < listenfd_cnt; ++ i ) {
 		pconn = get_conns_slot();
 		if ( NULL == pconn ) {
-			//fprintf( stderr, "conns full.\n" );
 			log_message( LOG_WARNING, "conns array full, refusing service." );
 			return -1;
 		}
 		pconn->fd = listenfds[i].fd;
 		pconn->read_handle = accept_handle;
 		pconn->write_handle = NULL;
-		//pconn->addr = listenfds[i].addr;
-		//pconn->addrlen = listenfds[i].addrlen; 		
+		pconn->read_buffer = pconn->write_buffer = NULL;
+		pconn->type = C_LISTEN;
 
 		epoll_add_connection( pconn, EPOLLIN );
+
+		log_message( LOG_NOTICE, "init_conns_array: add listenfd into epoll." );
 	}
 
 	return TRUE;
@@ -181,7 +175,6 @@ conn_t* get_conns_slot()
 	conn_t *pconn = free_conn;
 	free_conn = free_conn->data;
 	++ fullcnt;
-	//fprintf( stderr, "fullconns:%d.\n", fullcnt );
 	log_message( LOG_NOTICE, "fullcons:%d.", fullcnt );
 
 	return pconn;
@@ -195,14 +188,17 @@ void release_conns_slot( conn_t *pconn )
 	if ( NULL == pconn )
 		return;
 
-	if ( NULL != pconn->read_buffer ) {
-		delete_buffer( pconn->read_buffer );
-		pconn->read_buffer = NULL;
+	//只有两个conn都删除时才会delete buffer
+	if ( NULL == pconn->server_conn ) {		//read_buffer write是client_conn server_conn共用的
+		if ( NULL != pconn->read_buffer ) {
+			delete_buffer( pconn->read_buffer );
+		}
+		if ( NULL != pconn->write_buffer ) {
+			delete_buffer( pconn->write_buffer );
+		}
 	}
-	if ( NULL != pconn->write_buffer ) {
-		delete_buffer( pconn->write_buffer );
-		pconn->write_buffer = NULL;
-	}
+
+	pconn->read_buffer = pconn->write_buffer = NULL;
 	if ( NULL != pconn->server_conn ) {
 		pconn->server_conn->server_conn = NULL;
 		pconn->server_conn = NULL;
@@ -216,7 +212,6 @@ void release_conns_slot( conn_t *pconn )
 	pconn->data = free_conn;
 	free_conn = pconn;
 	-- fullcnt;
-	//fprintf( stderr, "fullconns:%d.\n", fullcnt );
 	log_message( LOG_NOTICE, "fullcons:%d.", fullcnt );
 }	
 
@@ -225,8 +220,6 @@ void release_conns_slot( conn_t *pconn )
  */
 int accept_handle( conn_t *pconn )
 {
-	fprintf( stderr, "accept handle.\n" );
-
 	int fd;
 	struct sockaddr_in	addr;
 	socklen_t addrlen;
@@ -234,7 +227,6 @@ int accept_handle( conn_t *pconn )
 	
 	fd = accept( pconn->fd, (struct sockaddr*)&addr, &addrlen );
 	if ( fd < 0 ) {
-		//fprintf( stderr, "accept error:%s.\n", strerror(errno) );
 		log_message( LOG_WARNING, "accept error:%s.", strerror(errno) );
 		return -1;
 	}
@@ -251,18 +243,16 @@ int accept_handle( conn_t *pconn )
 	client_conn->read_buffer = new_buffer();
 	client_conn->write_buffer = new_buffer();
 	client_conn->server_conn = NULL;
-	//client_conn->addr = safemalloc( addrlen );
-	//memcpy( newconn->addr, &addr, addrlen );
-	//client_conn->addrlen = addrlen;
-	//client_conn->type = C_CLIENT;
+	client_conn->addr = addr;
+	client_conn->read_closed = client_conn->write_closed = 0;
+	client_conn->type = C_CLIENT;
 
-	//fprintf( stderr, "create conn:%x fd:%d.\n", client_conn, client_conn->fd );		
 	char *ip = NULL;
 	ip = inet_ntoa( addr.sin_addr );
-	log_message( LOG_DEBUG, "create a new conn[fd:%d] client[%s]--proxy.", ip, client_conn->fd );
+	log_message( LOG_DEBUG, "create a new conn[fd:%d] client[%s:%d]--proxy.", ip, client_conn->fd, ntohs(addr.sin_port) );
 
 	epoll_add_connection( client_conn, EPOLLIN );	
-	epoll_mod_connection( pconn, EPOLLIN );	
+	epoll_mod_connection( pconn, EPOLLIN );			//重新把监听套接子添加到epoll中
 
 	return TRUE;
 }
@@ -274,51 +264,44 @@ int read_client_handle( conn_t *pconn )
 {
 	int ret;
 	char ip[50];
-	uint16_t port;
+	uint16_t	port;
 
 	ret = read_buffer( pconn->fd, pconn->read_buffer );
-	if ( ret < 0 ) {
-		//log_message( LOG_ERROR, "read_client_handle client [%s:%d] error." );
-		return -1;
-	}
-	fprintf( stderr, "read %d bytes from client.\n", ret );
-	log_message( LOG_DEBUG, "read %d bytes from client.", ret );
+	log_message( LOG_NOTICE, "read %d bytes from client.", ret );
 
-	//process client http request
-	if ( NULL == pconn->server_conn || 
-	/*
-     * the fd connection to server has been reused by another client.
-	 * maybe has some potential problem.
+	/**
+	 *  处理读取的数据
 	 */
+	if ( NULL == pconn->server_conn || 
+      //the fd connection to server has been reused by another client.
+	  //maybe has some potential problem.
 		pconn->server_conn->server_conn != pconn ) {
 
-		if ( extract_ip_buffer(pconn->read_buffer,ip, sizeof(ip),&port) < 0 ) {
-			//fprintf( stderr, "extract_ip_buffer error.\n" );
+		//创建新的链接套接字，连接虚拟机
+		memset( ip, 0, sizeof(ip) );
+		//抽取VM IP:port，并重写url
+		//需要再次修改这段代码
+		if ( extract_ip_buffer(pconn->read_buffer, ip, sizeof(ip), &port) < 0 ) {
 			log_message( LOG_ERROR, "extract_ip_buffer error." );
 			return -1;
 		}
-		log_message( LOG_DEBUG, "new conn--ip:%s, port:%d\n", ip, port );
-	
+		log_message( LOG_DEBUG, "new conn to Vm--ip:%s, port:%d\n", ip, port );
+
 		int fd;	
 		struct sockaddr_in	addr;
 		bzero( &addr, sizeof(addr) );
 		addr.sin_family = AF_INET;
 		addr.sin_port = htons( port );
 		if ( inet_pton( AF_INET, ip, &addr.sin_addr ) < 0 ) {
-			//fprintf( stderr, "inet_pton error %s.\n", strerror(errno) );
 			log_message( LOG_ERROR, "inet_pton error %s.\n", strerror(errno) );
 			return -1;
 		}
-				
 		fd = socket( AF_INET, SOCK_STREAM, 0 );
 		if ( fd < 0 ) {
-			//fprintf( stderr, "socket error:%s.\n" );
 			log_message( LOG_ERROR, "socket error:%s.\n", strerror(errno) );
 			return -1;
 		}
-		
 		if ( connect( fd, (struct sockaddr*)&addr, sizeof(addr) ) < 0 ) {
-			//fprintf( stderr, "connect error.\n" );
 			log_message( LOG_ERROR, "connect error:%s.\n", strerror(errno) );
 			return -1;
 		}
@@ -326,7 +309,6 @@ int read_client_handle( conn_t *pconn )
 		conn_t * server_conn;
 		server_conn = get_conns_slot();
 		if ( NULL == server_conn ) {
-			//fprintf( stderr, "get_conns_slot() error\n" );
 			return -1;
 		}
 		server_conn->fd = fd;
@@ -336,43 +318,51 @@ int read_client_handle( conn_t *pconn )
 		server_conn->server_conn = pconn;
 		server_conn->read_buffer = NULL;
 		server_conn->write_buffer = NULL;
+		server_conn->addr = addr;
 
 		pconn->server_conn = server_conn;	
-		//fprintf( stderr, "create conn:%x, fd:%d\n", server_conn, server_conn->fd );
-		log_message( LOG_NOTICE, "create conn:%x, fd:%d\n", server_conn, server_conn->fd );
 
-		//level trigged
+		log_message( LOG_DEBUG, "create conn to Vm[%s:%d]\n", ip, port );
+
+		//edge trigged
 		epoll_add_connection( server_conn, EPOLLOUT );
 	}
-	
 	else {
-		/*
-		 * It's important too!
-		 * chrome using keep-alive connection, maybe!
-		 * that's why this proxy cann't dealing with requests from chrome
-		 */
 		 //rewrite URL in request
-		extract_ip_buffer(pconn->read_buffer, ip, sizeof(ip), &port);
-		fprintf( stderr, "keep-alive conn\n" );
+		//需要再次修改这段代码
+		if ( extract_ip_buffer(pconn->read_buffer, ip, sizeof(ip), &port) < 0 ) {
+			log_message( LOG_ERROR, "extract_ip_buffer error, just rewrite url." );
+			return -1;
+		}
 	}
-	
+
+	if ( 0 == ret  || ret < 0 ) {		//关闭或是出错
+		pconn->read_closed = 1;
+		if ( 1 == pconn->write_closed ) {
+			return -1;		//需要删除这个连接
+		}
+	}
+
 	/*
 	 * it's very important
 	 */
 	uint32_t clientf = 0, serverf = 0;
-	if ( buffer_size( pconn->read_buffer ) > 0 )
-		serverf |= EPOLLOUT;
-	if ( buffer_size( pconn->write_buffer ) < MAXBUFFSIZE )
-		serverf |= EPOLLIN;
-	epoll_mod_connection( pconn->server_conn, serverf );
-	
-	if ( buffer_size( pconn->write_buffer ) > 0 )
+	if ( NULL != pconn->server_conn ) {
+		conn_t	*pserv_conn = pconn->server_conn;
+		if ( 0 == pserv_conn->write_closed && buffer_size( pserv_conn->write_buffer ) > 0 )
+			serverf |= EPOLLOUT;
+		if ( 0 == pserv_conn->read_closed && buffer_size( pserv_conn->read_buffer ) < MAXBUFFSIZE )
+			serverf |= EPOLLIN;
+		epoll_mod_connection( pserv_conn, serverf );
+	}
+
+	if ( 0 == pconn->write_closed && buffer_size( pconn->write_buffer ) > 0 )
 		clientf |= EPOLLOUT;
-	if ( buffer_size( pconn->read_buffer ) < MAXBUFFSIZE )
+	if ( 0 == pconn->read_closed && buffer_size( pconn->read_buffer ) < MAXBUFFSIZE )
 		clientf |= EPOLLIN;
 	epoll_mod_connection( pconn, clientf );
 
-	return TRUE;
+	return 0;
 }
 
 /*
@@ -382,32 +372,45 @@ int write_client_handle( conn_t *pconn )
 {
 	int bytes;
 	bytes = write_buffer( pconn->fd, pconn->write_buffer );
-	if ( bytes < 0 ) {
-		//log_message( LOG_ERROR, "write_client_handle client [%s:%d] error." );
-		return -1;
+	log_message( LOG_NOTICE, "write %d bytes to client.",  bytes );
+
+	if ( bytes < 0 ) {		//写出错
+		pconn->write_closed = 1;
+		if ( 1 == pconn->read_closed )
+			return -1;
 	}
-	fprintf( stderr, "write %d bytes to client.\n",  bytes );
-	log_message( LOG_DEBUG, "write %d bytes to client.",  bytes );
-		
+	else {
+		if ( 0==buffer_size(pconn->write_buffer) &&			//发送完缓冲区中的数据
+				//并且server_fd已经关闭写了
+			( NULL==pconn->server_conn || 
+				( NULL!=pconn->server_conn && 1 == pconn->server_conn->read_closed )) )  {
+			//关闭写
+			pconn->write_closed = 1;
+			if ( 1 == pconn->read_closed )
+				return -1;
+		}
+	}
+
 	/*
 	 * it's very important
 	 */
-	//epoll_mod_connection( pconn, EPOLLIN | EPOLLOUT );
 	uint32_t clientf = 0, serverf = 0;
-	if ( buffer_size( pconn->read_buffer ) > 0 )
-		serverf |= EPOLLOUT;
-	if ( buffer_size( pconn->write_buffer ) < MAXBUFFSIZE )
-		serverf |= EPOLLIN;
-	if ( NULL != pconn->server_conn )
-		epoll_mod_connection( pconn->server_conn, serverf );
-	
-	if ( buffer_size( pconn->write_buffer ) > 0 )
+	if ( NULL != pconn->server_conn ) {
+		conn_t	*pserv_conn = pconn->server_conn;
+		if ( 0 == pserv_conn->write_closed && buffer_size( pserv_conn->write_buffer ) > 0 )
+			serverf |= EPOLLOUT;
+		if ( 0 == pserv_conn->read_closed && buffer_size( pserv_conn->read_buffer ) < MAXBUFFSIZE )
+			serverf |= EPOLLIN;
+		epoll_mod_connection( pserv_conn, serverf );
+	}
+
+	if ( 0 == pconn->write_closed && buffer_size( pconn->write_buffer ) > 0 )
 		clientf |= EPOLLOUT;
-	if ( buffer_size( pconn->read_buffer ) < MAXBUFFSIZE )
+	if ( 0 == pconn->read_closed && buffer_size( pconn->read_buffer ) < MAXBUFFSIZE )
 		clientf |= EPOLLIN;
 	epoll_mod_connection( pconn, clientf );
 
-	return TRUE;
+	return 0;
 }
 
 /*
@@ -417,39 +420,49 @@ int read_server_handle( conn_t *pconn )
 {
 	if ( NULL == pconn->server_conn	||
 		pconn->server_conn->server_conn != pconn ) {
-		log_message( LOG_WARNING, "read fromserver , but client has closed connection." );
+		//如果client_conn关闭了，继续读没有意义
+		log_message( LOG_WARNING, "read_server_handle, but client has closed connection." );
+		return -1;
+	}
+
+	if ( NULL == pconn->read_buffer ) {
+		log_message( LOG_WARNING, "read_server_handle: read_buffer is null." );
 		return -1;
 	}
 
 	int bytes;
-	bytes = read_buffer( pconn->fd, pconn->server_conn->write_buffer );
-	if ( bytes < 0 ) {
-		//log_message( LOG_ERROR, "read_server_handle server [%s:%d] error." );
-		return -1;
+	bytes = read_buffer( pconn->fd, pconn->read_buffer );
+	log_message( LOG_NOTICE, "read %d bytes from server.\n", bytes );
+
+	if ( 0 == bytes || bytes < 0 ) {
+		pconn->read_closed = 1;
+		if ( 1 == pconn->write_closed ) {
+			return -1;		//需要删除这个连接
+		}
 	}
-	fprintf( stderr, "read %d bytes from server.\n", bytes );
-	log_message( LOG_DEBUG, "read %d bytes from server.\n", bytes );
 
 	/*
 	 * it's very important
 	 */
-	//epoll_mod_connection( pconn, EPOLLIN );
-	//epoll_mod_connection( pconn->server_conn, EPOLLOUT );
-
 	uint32_t clientf = 0, serverf = 0;
-	if ( buffer_size( pconn->server_conn->read_buffer ) > 0 )
+	//写缓存中还有数据
+	if ( 0 == pconn->write_closed && buffer_size( pconn->write_buffer ) > 0 )
 		serverf |= EPOLLOUT;
-	if ( buffer_size( pconn->server_conn->write_buffer ) < MAXBUFFSIZE )
-		serverf |= EPOLLIN;
+	//读缓存未满并且未关闭读
+	if ( 0 == pconn->read_closed && buffer_size( pconn->read_buffer ) < MAXBUFFSIZE )	
+		serverf |= EPOLLIN;			//继续侦听读事件
 	epoll_mod_connection( pconn, serverf );
-	
-	if ( buffer_size( pconn->server_conn->write_buffer ) > 0 )
-		clientf |= EPOLLOUT;
-	if ( buffer_size( pconn->server_conn->read_buffer ) < MAXBUFFSIZE )
-		clientf |= EPOLLIN;
-	epoll_mod_connection( pconn->server_conn, clientf );
 
-	return TRUE;
+	conn_t	*pclie_conn;
+	if ( NULL != ( pclie_conn = pconn->server_conn ) ) {
+		if ( 0 == pclie_conn->write_closed && buffer_size( pclie_conn->write_buffer ) > 0 )
+			clientf |= EPOLLOUT;
+		if ( 0 == pclie_conn->read_closed && buffer_size( pclie_conn->read_buffer ) < MAXBUFFSIZE )
+			clientf |= EPOLLIN;
+		epoll_mod_connection( pclie_conn, clientf );
+	}
+
+	return 0;
 }
 
 /*
@@ -457,37 +470,42 @@ int read_server_handle( conn_t *pconn )
  */
 int write_server_handle( conn_t *pconn )
 {
-	if ( NULL == pconn->server_conn	||
-		pconn->server_conn->server_conn != pconn ) {
-		log_message( LOG_WARNING, "write to server [%s:%d], but client [%s:%d] has closed connection." );
+	//如果client_conn已经关闭，还是需要把剩余数据发送给server端
+
+	if ( NULL == pconn->write_buffer ) {
+		log_message( LOG_ERROR, "write_server_handle: write_buffer is NULL." );
 		return -1;
 	}
 
 	int bytes;
-	bytes = write_buffer( pconn->fd, pconn->server_conn->read_buffer );
+	bytes = write_buffer( pconn->fd, pconn->write_buffer );
+	log_message( LOG_NOTICE, "send to server %d bytes.\n",  bytes );
+
 	if ( bytes < 0 ) {
 		//log_message( LOG_ERROR, "write_server_handle server [%s:%d] error." );
 		return -1;
 	}
-	fprintf( stderr, "send to server %d bytes.\n",  bytes );
-	log_message( LOG_DEBUG, "send to server %d bytes.\n",  bytes );
 
 	/*
 	 * it's very important
 	 */
-	//epoll_mod_connection( pconn, EPOLLIN | EPOLLOUT );
 	uint32_t clientf = 0, serverf = 0;
-	if ( buffer_size( pconn->server_conn->read_buffer ) > 0 )
+	//写缓存中还有数据
+	if ( 0 == pconn->write_closed && buffer_size( pconn->write_buffer ) > 0 )
 		serverf |= EPOLLOUT;
-	if ( buffer_size( pconn->server_conn->write_buffer ) < MAXBUFFSIZE )
-		serverf |= EPOLLIN;
+	//读缓存未满并且未关闭读
+	if ( 0 == pconn->read_closed && buffer_size( pconn->read_buffer ) < MAXBUFFSIZE )	
+		serverf |= EPOLLIN;			//继续侦听读事件
 	epoll_mod_connection( pconn, serverf );
-	
-	if ( buffer_size( pconn->server_conn->write_buffer ) > 0 )
-		clientf |= EPOLLOUT;
-	if ( buffer_size( pconn->server_conn->read_buffer ) < MAXBUFFSIZE )
-		clientf |= EPOLLIN;
-	epoll_mod_connection( pconn->server_conn, clientf );
+
+	conn_t	*pclie_conn;
+	if ( NULL != ( pclie_conn = pconn->server_conn ) ) {
+		if ( 0 == pclie_conn->write_closed && buffer_size( pclie_conn->write_buffer ) > 0 )
+			clientf |= EPOLLOUT;
+		if ( 0 == pclie_conn->read_closed && buffer_size( pclie_conn->read_buffer ) < MAXBUFFSIZE )
+			clientf |= EPOLLIN;
+		epoll_mod_connection( pclie_conn, clientf );
+	}
 
 	return TRUE;
 }

@@ -4,5 +4,6 @@
 修改bug： 
 1、修改makefile文件,添加-Werror
 2  log system
-3、解决websshproxy长时间会挂掉的问题
+3、采用ETmode
+4、计划修改extract_ip_from_buffer
 

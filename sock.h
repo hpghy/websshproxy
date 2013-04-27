@@ -35,10 +35,14 @@ struct conn_s {
 	struct conn_s		*server_conn;
 
 	/*
-     * have no effection
+     * hp-modified 2013-4-24 
    	 */
-	struct sockaddr		*addr;
-	socklen_t			addrlen;
+	struct sockaddr_in		addr;
+	//socklen_t			addrlen;
+
+	//hp add 2013/04/26
+	uint16_t	read_closed;
+	uint16_t	write_closed;
 
 	void 	*data;
 };

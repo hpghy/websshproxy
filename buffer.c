@@ -167,7 +167,9 @@ remove_from_buffer(struct buffer_s *buffptr)
 /*
  * Reads the bytes from the socket, and adds them to the buffer.
  * Takes a connection and returns the number of bytes read.
- * > 0: read bytes; == 0: eagain; < 0: error, connection closed 
+ * >0: 当前读取的数据，等待下次读取
+ * =0: 读半关闭
+ * <0: 出现错误
  */
 #define READ_BUFFER_SIZE (1024 * 5)
 ssize_t
@@ -187,59 +189,55 @@ read_buffer(int fd, struct buffer_s * buffptr)
 		return 0;
 	total = 0;
 
-//NONREAD:
+NONREAD:
 	bytesin = read(fd, buffer, READ_BUFFER_SIZE);
 
 	if (bytesin > 0) {
 		if (add_to_buffer(buffptr, buffer, bytesin) < 0) {
-			//fprintf( stderr, "readbuff: add_to_buffer() error\n" );
 			log_message( LOG_ERROR, "readbuff, add_to_buffer error." );
 			return -1;
 		}
-		
 		total += bytesin;
-		/*
+		//缓冲区中还有数据
 		if ( bytesin == READ_BUFFER_SIZE ) {
 			goto NONREAD;			
-	 	}*/	
-		return total;
-
-	} else {
+	 	}	
+	} 
+	else {
 		if (bytesin == 0) {
 			/* connection was closed by client */
-			//hp:
-			//fprintf( stderr, "readbuffer: conn closed by client\n" );
 			log_message( LOG_NOTICE, "connection [fd:%d] closed by client.", fd );
-			return -1;
-		} else {
+			return 0;
+		} 
+		else {
 			switch (errno) {
 #ifdef EWOULDBLOCK
 			case EWOULDBLOCK:
+				//
 #else
 #  ifdef EAGAIN
 			case EAGAIN:
-				fprintf( stderr, "stderr, EAGAIN signal.\n" );
+				//fprintf( stderr, "stderr, EAGAIN signal.\n" );
 #  endif
 #endif
 			case EINTR:
-				return 0;
+				return total;
 			default:
-				//log_message(LOG_ERR,
-				//	    "readbuff: recv() error \"%s\" on file descriptor %d",
-				//	    strerror(errno), fd);
-				//hp:
-				//fprintf( stderr, 	
-				//	    "readbuff: recv() error \"%s\" on file descriptor %d",
-				//	    strerror(errno), fd);
+				log_message(LOG_ERROR,
+					    "readbuff: recv() error \"%s\" on file descriptor %d",
+					    strerror(errno), fd);
 				return -1;
 			}
 		}
 	}
+	return -1;
 }
 
 /*
  * Write the bytes in the buffer to the socket.
  * Takes a connection and returns the number of bytes written.
+ * >=0: 当前发送的数据，等待下次发送
+ * <0: 出现错误
  */
 ssize_t
 write_buffer(int fd, struct buffer_s * buffptr)
@@ -254,7 +252,7 @@ write_buffer(int fd, struct buffer_s * buffptr)
 		return 0;
 	total = 0;
 
-//NONWRITE:
+NONWRITE:
 	/* Sanity check. It would be bad to be using a NULL pointer! */
 	assert(BUFFER_HEAD(buffptr) != NULL);
 	line = BUFFER_HEAD(buffptr);
@@ -269,11 +267,11 @@ write_buffer(int fd, struct buffer_s * buffptr)
 		if (line->pos == line->length) {
 			free_line(remove_from_buffer(buffptr));
 			
-			/*
 			if ( BUFFER_HEAD(buffptr) != NULL )
 				goto NONWRITE;
-			*/
 		}
+
+		//当前发送完毕，等待下次的发送
 		return total;
 
 	} else {
@@ -286,20 +284,20 @@ write_buffer(int fd, struct buffer_s * buffptr)
 #  endif
 #endif
 		case EINTR:
-			fprintf( stderr, "write_buffer eagain.\n" );
-			return 0;
+			//fprintf( stderr, "write_buffer eagain.\n" );
+			return total;
+
 		case ENOBUFS:
 		case ENOMEM:
-			/*
-			log_message(LOG_ERR,
+			log_message(LOG_ERROR,
 				    "writebuff: write() error [NOBUFS/NOMEM] \"%s\" on file descriptor %d",
-				    strerror(errno), fd); */
-			return 0;
+				    strerror(errno), fd);
+			return total;
+
 		default:
-			/*
-			log_message(LOG_ERR,
+			log_message(LOG_ERROR,
 				    "writebuff: write() error \"%s\" on file descriptor %d",
-				    strerror(errno), fd); */
+				    strerror(errno), fd); 
 			return -1;
 		}
 	}
@@ -314,10 +312,15 @@ static void strremove( char *buffer, int start, int n, int size )
 	}
 	buffer[i-n] = 0;
 }
+
 /*
  * extract IP:port from http request
  * a potential problem: maybe not a complete http request!
  */
+/**
+  * 这段代码一直有一个问题，我一直没有修正
+  * 需要对buffer_s重新封装一下，方便遍历没一个字符
+  */
 int extract_ip_buffer( struct buffer_s *bufferptr, char *ip, ssize_t length, uint16_t *port )
 {
 	struct bufline_s * lines;
