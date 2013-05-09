@@ -24,36 +24,36 @@ static unsigned int work_idx;
 
 static void worker_signal( int signo )
 {
-	fprintf( stderr, "worker:%d receive signal.\n", getpid() );
+	//fprintf( stderr, "worker:%d receive signal.\n", getpid() );
 
 	switch ( signo ) {
 	case SIGHUP:
 		//fprintf( stderr, "worker:%d receive SIGHUP.\n", getpid() );
-		log_message( LOG_ERROR, "worker:%d receive SIGHUP.", getpid() );
+		log_message( LOG_DEBUG, "worker:%d receive SIGHUP.", getpid() );
 		break;
 
 	case SIGTERM:
 		//fprintf( stderr, "worker:%d receive SIGTERM.\n", getpid() );
-		log_message( LOG_ERROR, "worker:%d receive SIGTERM.", getpid() );
+		log_message( LOG_DEBUG, "worker:%d receive SIGTERM.", getpid() );
 		break;
 
 	case SIGINT:
 		//fprintf( stderr, "worker:%d receive SIGHUP.\n", getpid() );
-		log_message( LOG_ERROR, "worker:%d receive SIGHUP.", getpid() );
+		log_message( LOG_DEBUG, "worker:%d receive SIGHUP.", getpid() );
 		break;
 
 	case SIGPIPE:
 		//fprintf( stderr, "worker:%d receive SIGPIPE.\n", getpid() );
-		log_message( LOG_ERROR, "worker:%d receive SIGPIPE.", getpid() );
+		log_message( LOG_DEBUG, "worker:%d receive SIGPIPE.", getpid() );
 		break;
 
 	default:
 		///fprintf( stderr, "worker:%d receive signal:%d.\n", getpid(), signo );
-		log_message( LOG_ERROR, "worker:%d receive default signal:%d.", getpid(), signo );
+		log_message( LOG_DEBUG, "worker:%d receive default signal:%d.", getpid(), signo );
 		return;
 	}
 
-	log_message( LOG_ERROR, "worker:%d exit after signal_handle", getpid() );
+	log_message( LOG_DEBUG, "worker:%d exit after signal_handle", getpid() );
 	exit(0);
 }
 
@@ -86,11 +86,10 @@ static void work_main( unsigned int index )
 		if ( ret < 0 ) {
 			//fprintf( stderr, "epoll_process_event error.\n" );
 			log_message( LOG_ERROR, "epoll_process_event error." );
-			//break;
 		}
 	}
 
-	fprintf( stderr, "work:%d go to dead.\n", getpid() );
+	//fprintf( stderr, "work:%d go to dead.\n", getpid() );
 	log_message( LOG_ERROR, "work:%d going to dead.\n", getpid() );
 }
 

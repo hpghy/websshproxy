@@ -36,7 +36,7 @@ static void sig_handle( int signal )
 		receive_sigint = TRUE;
 		break;
 
-	case SIGCHLD:
+	case SIGCHLD:		//子进程已经消亡
 		pid = wait( &status );
 		work_terminated( pid );
 		log_message( LOG_NOTICE, "work:%d terminated.", pid );
@@ -109,7 +109,7 @@ int main( int argc, char **argv )
 		case 'c':
 			config.configfile = safestrdup(optarg);
 			if (!config.configfile) {
-				fprintf(stderr, "Could not allocate memory.\n" );
+				fprintf( stderr, "Could not allocate memory.\n" );
 				return 0;
 			}
 			break;
@@ -128,19 +128,22 @@ int main( int argc, char **argv )
 		fprintf( stderr, "read config file error.\n" );
 		return 0;
 	}
-	set_log_level( config.loglevel );
-
-	//create log file and initializing log system
-	if ( config.logfile ) {
-		if ( open_log_file( config.logfile ) < 0 ) {
-			fprintf( stderr, "Could not create log file.\n" );
-			return 0;
-		}
-		print_store_logs();
-	}
 
 	if ( TRUE == daemon ) {
+		//create log file and initializing log system
+		set_log_level( config.loglevel );
+		if ( config.logfile ) {
+			if ( open_log_file( config.logfile ) < 0 ) {
+				fprintf( stderr, "Could not create log file.\n" );
+				return 0;
+			}
+			//print_store_logs();
+		}
 		makedaemon();
+	}
+	else {
+		//debug mode
+		fprintf( stderr, "debug mode...\n" );
 	}
 
 	//create pidfile

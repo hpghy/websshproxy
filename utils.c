@@ -115,78 +115,43 @@ void truncate_log_file(void)
 void set_log_level(int level)
 {
 	log_level = level;
-	fprintf( stderr, "loglevel:%s.\n", syslog_level[level] );
+	//fprintf( stderr, "loglevel:%s.\n", syslog_level[level] );
 }
 
-void log_message(int level, char *fmt, ...)
-{
-	//fprintf( stderr, "%d %d\n", getpid(), log_file_fd );
-	
-	/*
-	char str[STRING_LENGTH];
-	va_list args;
+void log_message(int level, char *fmt, ...) {
 
-	if ( log_file_fd > 0 ) {
-		va_start(args, fmt);
+    va_list args;
+    time_t nowtime;
+    char time_string[TIME_LENGTH];
+    char str[STRING_LENGTH];
 
-		snprintf( str, STRING_LENGTH, "pid:%d, level:%s ", getpid(), syslog_level[level] );
-		write( log_file_fd, str, strlen(str) );
-		vsnprintf(str, STRING_LENGTH, fmt, args);
-		write( log_file_fd, str, strlen(str) );
-		write( log_file_fd, "\n", 1 );
+    if ( level < log_level || log_file_fd > -1 )
+        return;
 
-		va_end(args);
-	}
-	else {
-		va_start(args, fmt);
+    va_start(args, fmt);
 
-		char msg[STRING_LENGTH];
-		vsnprintf(str, STRING_LENGTH, fmt, args);
-		sprintf( msg, "%s %s\n", syslog_level[level], str);
-		strncat( storelogs, msg, MIN( strlen(msg), sizeof(storelogs)-strlen(storelogs)-1 ) );
+    if ( log_file_fd < 0 ) {
+        vsnprintf(str, STRING_LENGTH, fmt, args);
+        va_end(args);
+        printf( "%s\n", str );
+        return;
+    }
 
-		va_end(args);
-		return;
-	}
-	//fprintf( stderr, "%s", fmt );
-	*/
-	va_list args;
-	time_t nowtime;
+    nowtime = time(NULL);
+    memset( time_string, 0, sizeof(time_string) );
+    strftime(time_string, TIME_LENGTH, "%b %d %H:%M:%S",
+         localtime(&nowtime));
+	 memset( str, 0, sizeof(str) );
+    snprintf(str, STRING_LENGTH, "%-9s %s [%ld]: ", syslog_level[level],
+         time_string, (long int) getpid());
 
-	char time_string[TIME_LENGTH];
-	char str[STRING_LENGTH];
+    assert(log_file_fd >= 0);
 
-	if ( level > log_level )
-		return;
+    vsnprintf(str+strlen(str), STRING_LENGTH, fmt, args);
+    strcat( str, "\n" );
+    write(log_file_fd, str, strlen(str) );
 
-	va_start(args, fmt);
-
-	if (!created_log_file || log_file_fd < 0 ) {
-
-		char msg[STRING_LENGTH];
-		vsnprintf(str, STRING_LENGTH, fmt, args);
-		sprintf( msg, "%d %s\n", level, str);
-		strncat( storelogs, msg, MIN( strlen(msg), sizeof(storelogs)-strlen(storelogs)-1 ) );
-
-		va_end(args);
-		return;
-	}
-
-	nowtime = time(NULL);
-	strftime(time_string, TIME_LENGTH, "%b %d %H:%M:%S",
-		 localtime(&nowtime));
-
-	snprintf(str, STRING_LENGTH, "%-9s %s [%ld]: ", syslog_level[level],
-		 time_string, (long int) getpid());
-
-	assert(log_file_fd >= 0);
-
-	write(log_file_fd, str, strlen(str));
-	vsnprintf(str, STRING_LENGTH, fmt, args);
-	write(log_file_fd, str, strlen(str));
-	write(log_file_fd, "\n", 1);
-	
-	va_end(args);
+    va_end(args);
 }
 
 int read_config_file( config_t * pconfig )
