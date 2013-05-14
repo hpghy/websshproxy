@@ -50,6 +50,7 @@ static int socket_blocking(int sock)
 }*/
 
 /* 
+ * 主进程调用
  * hp add 2012/10/18
  */
 int open_listening_sockets( config_t *pconfig )
@@ -228,7 +229,8 @@ int accept_handle( conn_t *pconn )
 	fd = accept( pconn->fd, (struct sockaddr*)&addr, &addrlen );
 	if ( fd < 0 ) {
 		log_message( LOG_WARNING, "accept error:%s.", strerror(errno) );
-		return -1;
+		epoll_mod_connection( pconn, EPOLLIN );			//重新把监听套接子添加到epoll中
+		return -1;		//惊群现象
 	}
 	
 	client_conn = get_conns_slot();
@@ -246,10 +248,11 @@ int accept_handle( conn_t *pconn )
 	client_conn->addr = addr;
 	client_conn->read_closed = client_conn->write_closed = 0;
 	client_conn->type = C_CLIENT;
+	printf( "after init client_conn\n" );
 
 	char *ip = NULL;
 	ip = inet_ntoa( addr.sin_addr );
-	log_message( LOG_DEBUG, "create a new conn[fd:%d] client[%s:%d]--proxy.", ip, client_conn->fd, ntohs(addr.sin_port) );
+	log_message( LOG_DEBUG, "create a new conn[fd:%d] client[%s:%d]--proxy.", client_conn->fd, ip, ntohs(addr.sin_port) );
 
 	epoll_add_connection( client_conn, EPOLLIN );	
 	epoll_mod_connection( pconn, EPOLLIN );			//重新把监听套接子添加到epoll中
@@ -265,6 +268,11 @@ int read_client_handle( conn_t *pconn )
 	int ret;
 	char ip[50];
 	uint16_t	port;
+
+	if ( 1 == pconn->read_closed ) {
+		log_message( LOG_WARNING, "try reading from client, but it closed read" );
+		return -1;
+	}
 
 	ret = read_buffer( pconn->fd, pconn->read_buffer );
 	log_message( LOG_NOTICE, "read %d bytes from client.", ret );
@@ -316,8 +324,8 @@ int read_client_handle( conn_t *pconn )
 		server_conn->write_handle = write_server_handle;
 		server_conn->type = C_SERVER;
 		server_conn->server_conn = pconn;
-		server_conn->read_buffer = NULL;
-		server_conn->write_buffer = NULL;
+		server_conn->read_buffer = pconn->write_buffer;
+		server_conn->write_buffer = pconn->read_buffer;
 		server_conn->addr = addr;
 
 		pconn->server_conn = server_conn;	
@@ -350,7 +358,7 @@ int read_client_handle( conn_t *pconn )
 	if ( NULL != pconn->server_conn ) {
 		conn_t	*pserv_conn = pconn->server_conn;
 		if ( 0 == pserv_conn->write_closed && buffer_size( pserv_conn->write_buffer ) > 0 )
-			serverf |= EPOLLOUT;
+			serverf |= EPOLLOUT;		//有数据待写入server端
 		if ( 0 == pserv_conn->read_closed && buffer_size( pserv_conn->read_buffer ) < MAXBUFFSIZE )
 			serverf |= EPOLLIN;
 		epoll_mod_connection( pserv_conn, serverf );
@@ -370,6 +378,11 @@ int read_client_handle( conn_t *pconn )
  */
 int write_client_handle( conn_t *pconn )
 {
+	if ( 1 == pconn->write_closed ) {
+		log_message( LOG_WARNING, "try writing to client, but it closed write" );
+		return -1;
+	}
+
 	int bytes;
 	bytes = write_buffer( pconn->fd, pconn->write_buffer );
 	log_message( LOG_NOTICE, "write %d bytes to client.",  bytes );
@@ -418,13 +431,16 @@ int write_client_handle( conn_t *pconn )
  */
 int read_server_handle( conn_t *pconn )
 {
+	if ( 1 == pconn->read_closed ) {
+		log_message( LOG_WARNING, "try reading from server, but it closed read" );
+		return -1;
+	}
 	if ( NULL == pconn->server_conn	||
 		pconn->server_conn->server_conn != pconn ) {
 		//如果client_conn关闭了，继续读没有意义
 		log_message( LOG_WARNING, "read_server_handle, but client has closed connection." );
 		return -1;
 	}
-
 	if ( NULL == pconn->read_buffer ) {
 		log_message( LOG_WARNING, "read_server_handle: read_buffer is null." );
 		return -1;
@@ -471,9 +487,12 @@ int read_server_handle( conn_t *pconn )
 int write_server_handle( conn_t *pconn )
 {
 	//如果client_conn已经关闭，还是需要把剩余数据发送给server端
-
 	if ( NULL == pconn->write_buffer ) {
 		log_message( LOG_ERROR, "write_server_handle: write_buffer is NULL." );
+		return -1;
+	}
+	if ( 1 == pconn->write_closed ) {
+		log_message( LOG_WARNING, "try writing to server, but it closed write" );
 		return -1;
 	}
 

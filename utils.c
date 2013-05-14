@@ -125,13 +125,14 @@ void log_message(int level, char *fmt, ...) {
     char time_string[TIME_LENGTH];
     char str[STRING_LENGTH];
 
-    if ( level < log_level || log_file_fd > -1 )
+    if ( level > log_level || log_file_fd > -1 )
         return;
 
     va_start(args, fmt);
 
     if ( log_file_fd < 0 ) {
-        vsnprintf(str, STRING_LENGTH, fmt, args);
+		snprintf( str, sizeof(str)-1, "%ld:", (long int)getpid() );
+        vsnprintf(str+strlen(str), sizeof(str)-strlen(str)-1, fmt, args);
         va_end(args);
         printf( "%s\n", str );
         return;

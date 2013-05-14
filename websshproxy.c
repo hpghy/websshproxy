@@ -10,7 +10,7 @@
 #include "heap.h"
 
 #define  DEFAULT_CONFIG_FILE 	"/root/hp/etc/websshproxy.conf"
-#define  VERSION	"1.4-beta hp 2012.11.21"
+#define  VERSION	"2.0-beta hp 2013.05.15"
 
 unsigned int	receive_sighup = FALSE;		//clear log file
 unsigned int	receive_sigterm = FALSE;	//termination
@@ -143,6 +143,7 @@ int main( int argc, char **argv )
 	}
 	else {
 		//debug mode
+		set_log_level( LOG_DEBUG );
 		fprintf( stderr, "debug mode...\n" );
 	}
 
