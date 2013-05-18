@@ -10,7 +10,7 @@
 #include "heap.h"
 
 #define  DEFAULT_CONFIG_FILE 	"/root/hp/etc/websshproxy.conf"
-#define  VERSION	"2.0-beta hp 2013.05.15"
+#define  VERSION	"2.1-beta hp 2013.05.18"
 
 unsigned int	receive_sighup = FALSE;		//clear log file
 unsigned int	receive_sigterm = FALSE;	//termination

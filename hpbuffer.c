@@ -189,3 +189,13 @@ NONWRITE:
 
 	return total;
 }
+
+/**
+ *	从url中抽取ip和端口
+ *  0表示抽取成功, 
+ *  -1表示不包含请求行
+ *  -2表示出错
+ */
+int extract_ip( hpbuffer_t *pbuf, char *ip, size_t size, uint16_t *port ) {
+
+}

@@ -3,6 +3,8 @@
 #include "heap.h"
 #include "buffer.h"
 
+#include <sys/stat.h>
+
 static char *syslog_level[] = {
 	NULL,
 	"LOG_ERROR",
@@ -124,6 +126,11 @@ void log_message(int level, char *fmt, ...) {
     time_t nowtime;
     char time_string[TIME_LENGTH];
     char str[STRING_LENGTH];
+	struct	stat	fs;
+
+	if ( 0 == fstat( log_file_fd, &fs )  && fs.st_size > 100 * 1024 * 1024 ) {	//100M
+		truncate_log_file();
+	}
 
     if ( level > log_level )
         return;

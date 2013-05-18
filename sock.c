@@ -368,18 +368,13 @@ int read_client_handle( conn_t *pconn )
 		int fd;	
 		struct sockaddr_in	addr;
 
+NEWCONN:
 		fd = open_client_socket( &addr, ip, port );
 		if ( fd < 0 ) {
 			//发送error.html
 			log_message( LOG_WARNING, "conn to Vm[%s:%d] failed.", ip, port );
 			if ( send_error_html( pconn->write_buffer ) < 0 )
 				return -1;				//需要修改epll
-			/*
-			//CONN_CLOSE_READ( pconn );	//客户端很可能是阻塞写，写完之后才等待响应
-			clientf |= EPOLLOUT;
-			epoll_mod_connection( pconn, clientf );
-			return 0;
-			*/
 			goto CLIENT_EPOLLSET;
 		}
 		
@@ -405,16 +400,26 @@ int read_client_handle( conn_t *pconn )
 
 		epoll_add_connection( server_conn, EPOLLIN|EPOLLOUT );
 	}
-	else {
+	else {			//这里假设http请求可以一次读完,以后需要再次修改
+
 		 //rewrite URL in request
 		ret = extract_ip_buffer(pconn->read_buffer, ip, sizeof(ip), &port);
-		if ( ret <= 0 ) {
+		if ( ret <= 0 ) {		//表示没有请求行或是格式出错
 		
 			epoll_mod_connection( pconn->server_conn, EPOLLIN );	//等待server读事件
 			log_message( LOG_ERROR, "extract_ip_buffer error, just rewrite url." );
 			//return 0;			//没有加入epollout中，因为需要等待更多数据的到来
 			goto CLIENT_EPOLLSET;
 		}
+
+		//判断当前server是否与url中的vm匹配，如果不匹配，则需要把整个连接删除
+		if ( 0 != strcasecmp( ip, inet_ntoa(pconn->server_conn->addr.sin_addr) ) ) {
+			epoll_del_connection( pconn->server_conn );
+			release_conns_slot( pconn->server_conn );
+			pconn->server_conn = NULL;
+			goto NEWCONN;		//与新的vm创建连接
+		}
+
 		epoll_mod_connection( pconn->server_conn, EPOLLIN|EPOLLOUT );
 	}
 
