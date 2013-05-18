@@ -16,7 +16,7 @@ listenfd_t	listenfds[IPMAXCNT];
 unsigned int	listenfd_cnt;
 
 /*
- *
+ * 
  */
 conn_t		conns[MAXCONNSLOTS];
 conn_t		*free_conn;
@@ -105,7 +105,7 @@ int open_listening_sockets( config_t *pconfig )
 				return -1;
 			}
 			listenfds[i].fd = fd;
-			log_message( LOG_NOTICE, "create listen socket:[%s:%d]", pconfig->ips[i], SHELLINABOXPORT );
+			log_message( LOG_DEBUG, "create listen socket:[%s:%d]", pconfig->ips[i], SHELLINABOXPORT );
 
 			listenfds[i].addr = (struct sockaddr*)safemalloc( sizeof(addr) );
 			memcpy( listenfds[i].addr, &addr, sizeof(addr) ); 
@@ -113,6 +113,28 @@ int open_listening_sockets( config_t *pconfig )
 		}
 	}	
 	return TRUE;
+}
+
+int open_client_socket( struct sockaddr_in* paddr, const char* ip, uint16_t port ) {
+	int fd;
+	bzero( paddr, sizeof(struct sockaddr_in) );
+	paddr->sin_family = AF_INET;
+	paddr->sin_port = htons( port );
+	if ( inet_pton( AF_INET, ip, &paddr->sin_addr ) < 0 ) {
+		log_message( LOG_ERROR, "inet_pton error %s.\n", strerror(errno) );
+		return -1;
+	}
+	fd = socket( AF_INET, SOCK_STREAM, 0 );
+	if ( fd < 0 ) {
+		log_message( LOG_ERROR, "socket error:%s.\n", strerror(errno) );
+		return -1;
+	}
+	if ( connect( fd, (struct sockaddr*)paddr, sizeof(struct sockaddr_in) ) < 0 ) {
+		log_message( LOG_ERROR, "connect error:%s.\n", strerror(errno) );
+		return -1;
+	}
+
+	return fd;
 }
 
 void close_listen_sockets()
@@ -159,7 +181,7 @@ int init_conns_array( int epfd )
 
 		epoll_add_connection( pconn, EPOLLIN );
 
-		log_message( LOG_NOTICE, "init_conns_array: add listenfd into epoll." );
+		log_message( LOG_DEBUG, "init_conns_array: add listenfd into epoll." );
 	}
 
 	return TRUE;
@@ -170,13 +192,16 @@ int init_conns_array( int epfd )
  */
 conn_t* get_conns_slot()
 {
-	if ( NULL == free_conn )
+	if ( NULL == free_conn ) {
+		log_message( LOG_WARNING, "fullcons:%d is full.", fullcnt );
 		return NULL;
+	}
 
 	conn_t *pconn = free_conn;
+	pconn->read_closed = pconn->write_closed = 0;
 	free_conn = free_conn->data;
 	++ fullcnt;
-	log_message( LOG_NOTICE, "fullcons:%d.", fullcnt );
+	log_message( LOG_DEBUG, "fullcons:%d.", fullcnt );
 
 	return pconn;
 }
@@ -208,12 +233,14 @@ void release_conns_slot( conn_t *pconn )
 	/*
 	 * it's very important
 	 */
-	close( pconn->fd );
+	close( pconn->fd );		//必定不是监听套接字,只有一个进程使用这个fd
 
 	pconn->data = free_conn;
 	free_conn = pconn;
 	-- fullcnt;
-	log_message( LOG_NOTICE, "fullcons:%d.", fullcnt );
+
+	log_message( LOG_CONN, "release conn[%s:%d:%d], fullcons:%d.", inet_ntoa(pconn->addr.sin_addr),
+			ntohs(pconn->addr.sin_port), pconn->fd, fullcnt );
 }	
 
 /*
@@ -227,9 +254,10 @@ int accept_handle( conn_t *pconn )
 	conn_t	*client_conn;
 	
 	fd = accept( pconn->fd, (struct sockaddr*)&addr, &addrlen );
+	epoll_mod_connection( pconn, EPOLLIN );			//重新把监听套接子添加到epoll中
+
 	if ( fd < 0 ) {
 		log_message( LOG_WARNING, "accept error:%s.", strerror(errno) );
-		epoll_mod_connection( pconn, EPOLLIN );			//重新把监听套接子添加到epoll中
 		return -1;		//惊群现象
 	}
 	
@@ -248,15 +276,12 @@ int accept_handle( conn_t *pconn )
 	client_conn->addr = addr;
 	client_conn->read_closed = client_conn->write_closed = 0;
 	client_conn->type = C_CLIENT;
-	printf( "after init client_conn\n" );
 
 	char *ip = NULL;
 	ip = inet_ntoa( addr.sin_addr );
-	log_message( LOG_DEBUG, "create a new conn[fd:%d] client[%s:%d]--proxy.", client_conn->fd, ip, ntohs(addr.sin_port) );
+	log_message( LOG_CONN, "create a new conn[fd:%d] client[%s:%d]--proxy.", client_conn->fd, ip, ntohs(addr.sin_port) );
 
 	epoll_add_connection( client_conn, EPOLLIN );	
-	epoll_mod_connection( pconn, EPOLLIN );			//重新把监听套接子添加到epoll中
-
 	return TRUE;
 }
 
@@ -269,55 +294,102 @@ int read_client_handle( conn_t *pconn )
 	char ip[50];
 	uint16_t	port;
 
-	if ( 1 == pconn->read_closed ) {
-		log_message( LOG_WARNING, "try reading from client, but it closed read" );
-		return -1;
+	if ( 1 == pconn->read_closed ) {		//因为某种原因不想读取client数据了
+		log_message( LOG_WARNING, "try reading from client[%s], but it closed read", inet_ntoa( pconn->addr.sin_addr ) );
+		return -1;							
 	}
 
 	ret = read_buffer( pconn->fd, pconn->read_buffer );
-	log_message( LOG_NOTICE, "read %d bytes from client.", ret );
+	log_message( LOG_DEBUG, "read %d bytes from client[%s:%d].", ret, inet_ntoa(pconn->addr.sin_addr), ntohs(pconn->addr.sin_port) );
+
+	if ( g_errno <= 0 ) {		//read occur error, or closed
+		log_message( LOG_CONN, "read occur error, close read from client[%s:%d].", inet_ntoa(pconn->addr.sin_addr), ntohs(pconn->addr.sin_port) );
+		CONN_CLOSE_READ( pconn );
+
+		/**
+		 *  client关闭写，并且buffer没有数据了，proxy也要关闭server的写
+		 *  write_server的事情
+		 *  发现问题了，这里要判断是否删除pconn->server_conn
+		 */
+		if ( NULL != pconn->server_conn && 0 == buffer_size( pconn->read_buffer ) ) {
+			CONN_CLOSE_WRITE( pconn->server_conn );
+
+			if ( 1 == pconn->server_conn->read_closed ) {		//very important
+				epoll_del_connection( pconn->server_conn );
+				release_conns_slot( pconn->server_conn );
+			}
+		}
+		/**
+		 *  当客户端关闭写，并且没有VM，(或者VM关闭写并且buffer空了，这时就该关闭连接)--write_client_handle有处理
+		 */
+		if ( 1 == pconn->write_closed || NULL == pconn->server_conn )
+			return -1;			//删除pconn
+	}
+
+	/**
+	 *	重新把conn加入epoll中
+	 */
+	/*
+	uint32_t clientf = 0;
+	if ( 0 == pconn->write_closed && buffer_size( pconn->write_buffer ) > 0 )
+		clientf |= EPOLLOUT;
+	if ( 0 == pconn->read_closed && buffer_size( pconn->read_buffer ) < MAXBUFFSIZE )
+		clientf |= EPOLLIN;
+	epoll_mod_connection( pconn, clientf );
+	*/
+
+	/**
+	 * 这个很重要，不然容易导致工作进程突然死掉
+	 */
+	if ( /*1 == pconn->read_closed &&*/ 0 == buffer_size( pconn->read_buffer ) ) {
+		//return 0;		//没有数据，不需要进入下一步
+		goto CLIENT_EPOLLSET;
+	}
 
 	/**
 	 *  处理读取的数据
 	 */
+
 	if ( NULL == pconn->server_conn || 
       //the fd connection to server has been reused by another client.
 	  //maybe has some potential problem.
 		pconn->server_conn->server_conn != pconn ) {
 
-		//创建新的链接套接字，连接虚拟机
 		memset( ip, 0, sizeof(ip) );
-		//抽取VM IP:port，并重写url
-		//需要再次修改这段代码
-		if ( extract_ip_buffer(pconn->read_buffer, ip, sizeof(ip), &port) < 0 ) {
-			log_message( LOG_ERROR, "extract_ip_buffer error." );
-			return -1;
+
+		//抽取VM IP:port，并重写url 需要再次修改这段代码
+		ret = extract_ip_buffer(pconn->read_buffer, ip, sizeof(ip), &port);
+		if ( ret <= 0 ) {
+			log_message( LOG_WARNING, "extract_ip_buffer not find vm ip:port" );
+			//return 0;				//等待新的数据到来
+			goto CLIENT_EPOLLSET;
 		}
-		log_message( LOG_DEBUG, "new conn to Vm--ip:%s, port:%d\n", ip, port );
 
 		int fd;	
 		struct sockaddr_in	addr;
-		bzero( &addr, sizeof(addr) );
-		addr.sin_family = AF_INET;
-		addr.sin_port = htons( port );
-		if ( inet_pton( AF_INET, ip, &addr.sin_addr ) < 0 ) {
-			log_message( LOG_ERROR, "inet_pton error %s.\n", strerror(errno) );
-			return -1;
-		}
-		fd = socket( AF_INET, SOCK_STREAM, 0 );
+
+		fd = open_client_socket( &addr, ip, port );
 		if ( fd < 0 ) {
-			log_message( LOG_ERROR, "socket error:%s.\n", strerror(errno) );
-			return -1;
-		}
-		if ( connect( fd, (struct sockaddr*)&addr, sizeof(addr) ) < 0 ) {
-			log_message( LOG_ERROR, "connect error:%s.\n", strerror(errno) );
-			return -1;
+			//发送error.html
+			log_message( LOG_WARNING, "conn to Vm[%s:%d] failed.", ip, port );
+			if ( send_error_html( pconn->write_buffer ) < 0 )
+				return -1;				//需要修改epll
+			/*
+			//CONN_CLOSE_READ( pconn );	//客户端很可能是阻塞写，写完之后才等待响应
+			clientf |= EPOLLOUT;
+			epoll_mod_connection( pconn, clientf );
+			return 0;
+			*/
+			goto CLIENT_EPOLLSET;
 		}
 		
 		conn_t * server_conn;
 		server_conn = get_conns_slot();
 		if ( NULL == server_conn ) {
-			return -1;
+			log_message( LOG_WARNING, "conn slot full." );
+			if ( send_slot_full( pconn->write_buffer ) < 0 )
+				return -1;				//需要修改epll
+			goto CLIENT_EPOLLSET;
 		}
 		server_conn->fd = fd;
 		server_conn->read_handle = read_server_handle;
@@ -327,43 +399,30 @@ int read_client_handle( conn_t *pconn )
 		server_conn->read_buffer = pconn->write_buffer;
 		server_conn->write_buffer = pconn->read_buffer;
 		server_conn->addr = addr;
-
 		pconn->server_conn = server_conn;	
 
-		log_message( LOG_DEBUG, "create conn to Vm[%s:%d]\n", ip, port );
+		log_message( LOG_CONN, "client[%s:%d] conn to Vm[%s:%d:%d]\n", inet_ntoa(pconn->addr.sin_addr), ntohs(pconn->addr.sin_port), ip, port, fd );
 
-		//edge trigged
-		epoll_add_connection( server_conn, EPOLLOUT );
+		epoll_add_connection( server_conn, EPOLLIN|EPOLLOUT );
 	}
 	else {
 		 //rewrite URL in request
-		//需要再次修改这段代码
-		if ( extract_ip_buffer(pconn->read_buffer, ip, sizeof(ip), &port) < 0 ) {
+		ret = extract_ip_buffer(pconn->read_buffer, ip, sizeof(ip), &port);
+		if ( ret <= 0 ) {
+		
+			epoll_mod_connection( pconn->server_conn, EPOLLIN );	//等待server读事件
 			log_message( LOG_ERROR, "extract_ip_buffer error, just rewrite url." );
-			return -1;
+			//return 0;			//没有加入epollout中，因为需要等待更多数据的到来
+			goto CLIENT_EPOLLSET;
 		}
-	}
-
-	if ( 0 == ret  || ret < 0 ) {		//关闭或是出错
-		pconn->read_closed = 1;
-		if ( 1 == pconn->write_closed ) {
-			return -1;		//需要删除这个连接
-		}
+		epoll_mod_connection( pconn->server_conn, EPOLLIN|EPOLLOUT );
 	}
 
 	/*
 	 * it's very important
 	 */
-	uint32_t clientf = 0, serverf = 0;
-	if ( NULL != pconn->server_conn ) {
-		conn_t	*pserv_conn = pconn->server_conn;
-		if ( 0 == pserv_conn->write_closed && buffer_size( pserv_conn->write_buffer ) > 0 )
-			serverf |= EPOLLOUT;		//有数据待写入server端
-		if ( 0 == pserv_conn->read_closed && buffer_size( pserv_conn->read_buffer ) < MAXBUFFSIZE )
-			serverf |= EPOLLIN;
-		epoll_mod_connection( pserv_conn, serverf );
-	}
-
+	uint32_t clientf = 0;
+CLIENT_EPOLLSET:
 	if ( 0 == pconn->write_closed && buffer_size( pconn->write_buffer ) > 0 )
 		clientf |= EPOLLOUT;
 	if ( 0 == pconn->read_closed && buffer_size( pconn->read_buffer ) < MAXBUFFSIZE )
@@ -379,26 +438,24 @@ int read_client_handle( conn_t *pconn )
 int write_client_handle( conn_t *pconn )
 {
 	if ( 1 == pconn->write_closed ) {
-		log_message( LOG_WARNING, "try writing to client, but it closed write" );
+		log_message( LOG_WARNING, "try writing to client[%s:%d], but it closed write", inet_ntoa(pconn->addr.sin_addr), ntohs(pconn->addr.sin_port) );
 		return -1;
 	}
 
 	int bytes;
 	bytes = write_buffer( pconn->fd, pconn->write_buffer );
-	log_message( LOG_NOTICE, "write %d bytes to client.",  bytes );
+	log_message( LOG_DEBUG, "write %d bytes to client[%s:%d].", bytes, inet_ntoa(pconn->addr.sin_addr), ntohs(pconn->addr.sin_port) );
 
-	if ( bytes < 0 ) {		//写出错
-		pconn->write_closed = 1;
+	if ( g_errno < 0 ) {		//写出错
+		CONN_CLOSE_WRITE( pconn );
 		if ( 1 == pconn->read_closed )
 			return -1;
 	}
 	else {
 		if ( 0==buffer_size(pconn->write_buffer) &&			//发送完缓冲区中的数据
-				//并且server_fd已经关闭写了
-			( NULL==pconn->server_conn || 
+			( NULL==pconn->server_conn ||					//并且server已经不再写
 				( NULL!=pconn->server_conn && 1 == pconn->server_conn->read_closed )) )  {
-			//关闭写
-			pconn->write_closed = 1;
+			CONN_CLOSE_WRITE( pconn );
 			if ( 1 == pconn->read_closed )
 				return -1;
 		}
@@ -432,27 +489,46 @@ int write_client_handle( conn_t *pconn )
 int read_server_handle( conn_t *pconn )
 {
 	if ( 1 == pconn->read_closed ) {
-		log_message( LOG_WARNING, "try reading from server, but it closed read" );
+		log_message( LOG_WARNING, "try reading from server[%s], but it closed read", inet_ntoa(pconn->addr.sin_addr) );
 		return -1;
 	}
-	if ( NULL == pconn->server_conn	||
+	if ( NULL == pconn->server_conn	||				//如果client_conn关闭了，继续读没有意义
 		pconn->server_conn->server_conn != pconn ) {
-		//如果client_conn关闭了，继续读没有意义
 		log_message( LOG_WARNING, "read_server_handle, but client has closed connection." );
+		CONN_CLOSE_READ( pconn );
 		return -1;
 	}
 	if ( NULL == pconn->read_buffer ) {
 		log_message( LOG_WARNING, "read_server_handle: read_buffer is null." );
+		CONN_CLOSE_READ( pconn );
 		return -1;
 	}
 
 	int bytes;
 	bytes = read_buffer( pconn->fd, pconn->read_buffer );
-	log_message( LOG_NOTICE, "read %d bytes from server.\n", bytes );
+	log_message( LOG_DEBUG, "read %d bytes from server[%s:%d].\n", bytes, inet_ntoa(pconn->addr.sin_addr), ntohs(pconn->addr.sin_port) );
 
-	if ( 0 == bytes || bytes < 0 ) {
-		pconn->read_closed = 1;
-		if ( 1 == pconn->write_closed ) {
+	if ( g_errno <= 0 ) {
+		CONN_CLOSE_READ( pconn );
+		/**
+		 *  server关闭写，并且buffer没有数据了，proxy也要关闭对client的写
+		 *  好像是write_client的工作
+		 *  同read_client_handle
+		 */
+		if ( NULL != pconn->server_conn && 0 == buffer_size( pconn->read_buffer ) ) {
+			CONN_CLOSE_WRITE( pconn->server_conn );
+
+			if ( 1 == pconn->server_conn->read_closed ) {		//very important
+				epoll_del_connection( pconn->server_conn );
+				release_conns_slot( pconn->server_conn );
+			}
+		}
+
+		/**
+		 *	如果server关闭写，并且client已经没有了，(或者client也关闭写并且buffer空了)--write_server_handle
+		 *  需要删除这个连接
+		 */
+		if ( 1 == pconn->write_closed || NULL == pconn->server_conn ) {
 			return -1;		//需要删除这个连接
 		}
 	}
@@ -492,17 +568,28 @@ int write_server_handle( conn_t *pconn )
 		return -1;
 	}
 	if ( 1 == pconn->write_closed ) {
-		log_message( LOG_WARNING, "try writing to server, but it closed write" );
+		log_message( LOG_WARNING, "try writing to server[%s] fd[%d], but it closed write", 
+				inet_ntoa(pconn->addr.sin_addr), pconn->fd );
 		return -1;
 	}
 
 	int bytes;
 	bytes = write_buffer( pconn->fd, pconn->write_buffer );
-	log_message( LOG_NOTICE, "send to server %d bytes.\n",  bytes );
+	log_message( LOG_DEBUG, "send to server[%s:%d] %d bytes.\n",  inet_ntoa(pconn->addr.sin_addr), ntohs(pconn->addr.sin_port), bytes );
 
-	if ( bytes < 0 ) {
-		//log_message( LOG_ERROR, "write_server_handle server [%s:%d] error." );
-		return -1;
+	if ( g_errno < 0 ) {					//写出错
+		CONN_CLOSE_WRITE( pconn );
+		if ( 1 == pconn->read_closed )
+			return -1;
+	}
+	else {
+		if ( 0==buffer_size(pconn->write_buffer) &&			//发送完缓冲区中的数据
+			( NULL==pconn->server_conn ||					//并且客户端不会再有数据过来
+				1 == pconn->server_conn->read_closed ) )  {
+			CONN_CLOSE_WRITE( pconn );
+			if ( 1 == pconn->read_closed )
+				return -1;
+		}
 	}
 
 	/*

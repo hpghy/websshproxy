@@ -11,7 +11,10 @@
 
 #define SHELLINABOXPORT		4200
 #define MAXLISTEN			1024
-#define MAXCONNSLOTS		1024*2
+#define MAXCONNSLOTS		1024*5
+
+extern int	g_errno;		//0: close read or write; -1: error,close connection; 1: normal
+extern int	g_linef;		//1: buffer contains at least one lines;
 
 struct buffer_s;
 struct conn_s;
@@ -48,8 +51,29 @@ struct conn_s {
 };
 typedef struct conn_s	conn_t;
 
+#define CONN_CLOSE_READ(pconn)		\
+	if ( 0 == pconn->read_closed && shutdown(pconn->fd,SHUT_RD) < 0 ) {		\
+		log_message( LOG_WARNING, "shutdown read fd[%d] error:%s",			\
+				pconn->fd, strerror(errno) );								\
+	}								\
+	log_message( LOG_CONN, "close read of conn[%s:%d]",						\
+	inet_ntoa(pconn->addr.sin_addr), ntohs(pconn->addr.sin_port) );			\
+	pconn->read_closed = 1;				
+
+#define CONN_CLOSE_WRITE(pconn)		\
+	if ( 0 == pconn->write_closed && shutdown(pconn->fd,SHUT_WR ) < 0 ) {	\
+		log_message( LOG_WARNING, "shutdown write fd[%d] error:%s",			\
+				pconn->fd, strerror(errno) );								\
+	}								\
+	log_message( LOG_CONN, "close write of conn[%s:%d]",		\
+	inet_ntoa(pconn->addr.sin_addr), ntohs(pconn->addr.sin_port) );			\
+	pconn->write_closed = 1;
+
+#define ISRDCLOSED(pconn)		( 1 == pconn->read_closed )
+#define ISWRCLOSED(pconn)	( 1 == pconn->write_closed )
 
 extern int open_listening_sockets( config_t *pconfig );
+extern int open_client_socket( struct sockaddr_in*, const char*, uint16_t);
 extern void close_listen_sockets();
 
 extern int init_conns_array( int );

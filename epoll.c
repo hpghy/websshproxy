@@ -105,9 +105,9 @@ int epoll_process_event()
 			//hp modified 2013/05/14
 			//如果accept_handler出错，不需要删除
 			if ( ret < 0 && pconn->type != C_LISTEN ) {		// error
+				log_message( LOG_DEBUG, "release connection fd:%d.", pconn->fd );
 				epoll_del_connection( pconn );
 				release_conns_slot( pconn );
-				log_message( LOG_NOTICE, "release connection fd:%d.", pconn->fd );
 			}
 		}
 
@@ -117,10 +117,10 @@ int epoll_process_event()
 				continue;
 			ret = pconn->write_handle( pconn );
 
-			if ( ret < 0 ) {		//error
+			if ( ret < 0 && pconn->type != C_LISTEN ) {		//error
+				log_message( LOG_DEBUG, "release connection fd:%d.", pconn->fd );
 				epoll_del_connection( pconn );
 				release_conns_slot( pconn );
-				log_message( LOG_WARNING, "release connection fd:%d.", pconn->fd );
 			}
 		}
 

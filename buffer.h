@@ -9,6 +9,8 @@
 #include "common.h"
 
 #define MAXBUFFSIZE	(1024*96)
+#define READ_BUFFER_SIZE (1024 * 5)
+
 #define BUFFER_HEAD(x) (x)->head
 #define BUFFER_TAIL(x) (x)->tail
 
@@ -37,8 +39,11 @@ extern int add_to_buffer(struct buffer_s *buffptr, unsigned char *data, size_t l
 extern ssize_t read_buffer(int fd, struct buffer_s *buffptr);
 extern ssize_t write_buffer(int fd, struct buffer_s *buffptr);
 
+extern int is_contain_line( struct buffer_s *pbuf );
 extern int extract_ip_buffer( struct buffer_s *bufferptr, 
 			char *ip, ssize_t length, uint16_t *port );
+extern int send_error_html( struct buffer_s *pbuf );
+extern int send_slot_full( struct buffer_s *pbuf );
 
 
 #endif				/* __BUFFER_H_ */

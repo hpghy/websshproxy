@@ -10,13 +10,14 @@
 
 #define LOG_ERROR		1
 #define LOG_WARNING		2
-#define LOG_NOTICE		3	
-#define LOG_DEBUG		4	
+#define LOG_CONN		3		//conn msg
+#define LOG_DEBUG		4		//all msg
 	
 struct config_s {
 	char 	*configfile;
 	char	*logfile;
 	char	*pidfile;
+	//char	*errorhtml;
 	
 	unsigned int	maxclients;
 	unsigned int	works;
@@ -43,5 +44,6 @@ extern SIGHANDLETYPE set_signal_handle( int signo, SIGHANDLETYPE func );
 extern int pidfile_create(const char *filename);
 
 extern void makedaemon();
+
 
 #endif

@@ -7,6 +7,32 @@
 #include "heap.h"
 #include "utils.h"
 
+static char errorhtml[] = "<html>\n\
+								<head>\n\
+								Warning Message:\n\
+								</head>\n\
+								<body>\n\
+		指定的虚拟机出错，连接失败，请检查url中的虚拟机IP是否有效，或与管理员联系！</p>\n\
+		谢谢使用本系统。</p>\n\
+		浙大CCNT实验室中国云项目组.</p>\n\
+								</body>\n\
+						   </html>";
+static char slothtml[] = "<html>\n\
+							<head>\n\
+								Warning Message:\n\
+							</head>\n\
+							<body>\n\
+					当前用户过多，请等待片刻再次连接.</p>\n\
+					谢谢使用本系统。</p>\n\
+					浙大CCNT实验室中国云项目组.</p>\n\
+							</body>\n\
+					   </html>";
+
+ /**
+ *	全局变量
+ */
+int	g_errno = 0;		//0: close read or write; -1: error,close connection; 1: normal
+int	g_linef = 0;		//1: buffer contains at least one lines;
 
 /*
  * Take a string of data and a length and make a new line which can be added
@@ -165,15 +191,9 @@ remove_from_buffer(struct buffer_s *buffptr)
 }
 
 /*
- * Reads the bytes from the socket, and adds them to the buffer.
- * Takes a connection and returns the number of bytes read.
- * >0: 当前读取的数据，等待下次读取
- * =0: 读半关闭
- * <0: 出现错误
+ * 返回读取的数据大小, g_errno设置错误提示
  */
-#define READ_BUFFER_SIZE (1024 * 5)
-ssize_t
-read_buffer(int fd, struct buffer_s * buffptr)
+ssize_t read_buffer(int fd, struct buffer_s * buffptr)
 {
 	ssize_t total;
 	ssize_t bytesin;
@@ -182,12 +202,14 @@ read_buffer(int fd, struct buffer_s * buffptr)
 	assert(fd >= 0);
 	assert(buffptr != NULL);
 
+	g_errno = 1;		//没有错误 
 	/*
 	 * Don't allow the buffer to grow larger than MAXBUFFSIZE
 	 */
 	if (buffptr->size >= MAXBUFFSIZE)
 		return 0;
 	total = 0;
+	memset( buffer, 0, sizeof(buffer) );
 
 NONREAD:
 	bytesin = read(fd, buffer, READ_BUFFER_SIZE);
@@ -195,52 +217,46 @@ NONREAD:
 	if (bytesin > 0) {
 		if (add_to_buffer(buffptr, buffer, bytesin) < 0) {
 			log_message( LOG_ERROR, "readbuff, add_to_buffer error." );
-			return -1;
+			g_errno = -1;
+			return 0;
 		}
 		total += bytesin;
-		//缓冲区中还有数据
-		if ( bytesin == READ_BUFFER_SIZE ) {
+		if ( bytesin == READ_BUFFER_SIZE ) {		//缓冲区中还有数据
 			goto NONREAD;			
 	 	}	
 	} 
 	else {
 		if (bytesin == 0) {
 			/* connection was closed by client */
-			log_message( LOG_NOTICE, "connection [fd:%d] closed by client.", fd );
-			return 0;
+			log_message( LOG_ERROR, "read 0 from fd[%d].", fd );
+			g_errno = 0;
 		} 
 		else {
 			switch (errno) {
 #ifdef EWOULDBLOCK
 			case EWOULDBLOCK:
-				//
 #else
 #  ifdef EAGAIN
 			case EAGAIN:
-				//fprintf( stderr, "stderr, EAGAIN signal.\n" );
 #  endif
 #endif
 			case EINTR:
-				return total;
+				g_errno = 1;		//不算是错误
+
 			default:
-				log_message(LOG_ERROR,
-					    "readbuff: recv() error \"%s\" on file descriptor %d",
-					    strerror(errno), fd);
-				return -1;
+				log_message(LOG_ERROR, "readbuff: recv() error \"%s\" on file descriptor %d", strerror(errno), fd);
+				g_errno = -2;
 			}
 		}
 	}
-	return -1;
+
+	return total;
 }
 
 /*
- * Write the bytes in the buffer to the socket.
- * Takes a connection and returns the number of bytes written.
- * >=0: 当前发送的数据，等待下次发送
- * <0: 出现错误
+ *  返回发送的总数据大小,错误设置在g_errno中
  */
-ssize_t
-write_buffer(int fd, struct buffer_s * buffptr)
+ssize_t write_buffer(int fd, struct buffer_s * buffptr)
 {
 	ssize_t total, n,  bytessent;
 	struct bufline_s *line;
@@ -248,14 +264,17 @@ write_buffer(int fd, struct buffer_s * buffptr)
 	assert(fd >= 0);
 	assert(buffptr != NULL);
 
+	g_errno = 1;
 	if (buffptr->size == 0)
 		return 0;
 	total = 0;
 
 NONWRITE:
 	/* Sanity check. It would be bad to be using a NULL pointer! */
-	assert(BUFFER_HEAD(buffptr) != NULL);
 	line = BUFFER_HEAD(buffptr);
+	if ( NULL == line ) {
+		return total;
+	}
 	
 	n = line->length - line->pos;
 	bytessent = send(fd, line->string + line->pos, n, MSG_NOSIGNAL);
@@ -266,15 +285,12 @@ NONWRITE:
 		total += bytessent;
 		if (line->pos == line->length) {
 			free_line(remove_from_buffer(buffptr));
-			
-			if ( BUFFER_HEAD(buffptr) != NULL )
+			if ( BUFFER_HEAD(buffptr) != NULL )		//如果还有数据继续发送
 				goto NONWRITE;
 		}
-
-		//当前发送完毕，等待下次的发送
-		return total;
-
-	} else {
+		g_errno = 1;
+	} 
+	else {
 		switch (errno) {
 #ifdef EWOULDBLOCK
 		case EWOULDBLOCK:
@@ -284,63 +300,86 @@ NONWRITE:
 #  endif
 #endif
 		case EINTR:
-			//fprintf( stderr, "write_buffer eagain.\n" );
-			return total;
+			g_errno = 1;
 
 		case ENOBUFS:
 		case ENOMEM:
 			log_message(LOG_ERROR,
 				    "writebuff: write() error [NOBUFS/NOMEM] \"%s\" on file descriptor %d",
 				    strerror(errno), fd);
-			return total;
-
 		default:
 			log_message(LOG_ERROR,
 				    "writebuff: write() error \"%s\" on file descriptor %d",
 				    strerror(errno), fd); 
-			return -1;
+			g_errno = -2;
 		}
 	}
+
+	return total;
 }
 
 static void strremove( char *buffer, int start, int n, int size )
 {
 	int i;
-	
 	for ( i = start+n; i < size; ++ i ) {
 		buffer[i-n] = buffer[i];
 	}
 	buffer[i-n] = 0;
 }
 
-/*
- * extract IP:port from http request
- * a potential problem: maybe not a complete http request!
+static const char* strnstr( const char *src, size_t size1, const char *pattern, size_t size2 ) {
+	if ( size2 > size1 )
+		return NULL;
+	int i;
+	for ( i = 0; i <= size1 - size2; ++ i ) {
+		if ( 0 == strncmp( src+i, pattern, size2 ) )
+			return src+i;
+	}
+	return NULL;
+}
+
+/**
+ * 判断缓存中是否有一行数据,都是http请求才调用这个函数
  */
+int is_contain_line( struct buffer_s *pbuf ) {
+	struct bufline_s	*pline;
+	pline = BUFFER_HEAD(pbuf);
+	while ( NULL != pline ) {
+		if ( NULL != memchr( pline->string+pline->pos, '\n', pline->length ) )
+			return 1;
+		pline = pline->next;
+	}
+	return 0;
+}
+
 /**
   * 这段代码一直有一个问题，我一直没有修正
   * 需要对buffer_s重新封装一下，方便遍历没一个字符
+  * return 1: ok, 0: not contain a http line, -1: format error
   */
 int extract_ip_buffer( struct buffer_s *bufferptr, char *ip, ssize_t length, uint16_t *port )
 {
 	struct bufline_s * lines;
-	char *pGet, *pPost, *pHttp, *p, *q;
+	const char *pGet, *pPost, *pHttp, *p, *q;
 
 	// 2kb size, i think it's enough to contain a http request
 	// test!
 	lines = BUFFER_TAIL( bufferptr );
-	pGet = strstr( (char*)lines->string, "GET" );
+	//pGet = strstr( (char*)lines->string, "GET" );
+	pGet = strnstr( (char*)lines->string, lines->length, "GET", 3 );
 	if ( NULL == pGet ) {
-		pPost = strstr( (char*)lines->string, "POST" );
+		//pPost = strstr( (char*)lines->string, "POST" );
+		pPost = strnstr( (char*)lines->string, lines->length, "POST", 4 );
 		if ( NULL == pPost ) {
-			return -1;
+			return 0;
 		}
 		pGet = pPost;
 	}
 
-	pHttp = strstr( (char*)lines->string, "HTTP" );
+	//pHttp = strstr( (char*)lines->string, "HTTP" );
+	pHttp = strnstr( (char*)lines->string, lines->length, "HTTP", 4 );
 	if ( NULL == pHttp ) {
-		return -1;
+		return 0;
 	} 
 	
 	p = strchr( pGet, '/' );	
@@ -359,7 +398,6 @@ int extract_ip_buffer( struct buffer_s *bufferptr, char *ip, ssize_t length, uin
 	}
 
 	//rewrite url
-	//fprintf( stderr, "before: bytes:%d,%s\n", lines->length, lines->string );
 	int n, start;
 	n = q-p-1;
 	if ( *q == '/' )
@@ -368,7 +406,25 @@ int extract_ip_buffer( struct buffer_s *bufferptr, char *ip, ssize_t length, uin
 	strremove( (char*)lines->string, start, n, lines->length );
 	lines->length -= n;
 	bufferptr->size -= n;
-	//fprintf( stderr, "after: bytes:%d,%s\n", lines->length, lines->string );
 
 	return TRUE;
 }	
+
+/**
+ *	为了简单，直接写死在代码里面好了
+ */
+int send_error_html( struct buffer_s *pbuf ) {
+	if (add_to_buffer( pbuf, (unsigned char*)errorhtml, strlen(errorhtml) ) < 0)  {
+		log_message( LOG_ERROR, "send_error_html error." );
+		return -1;
+	}
+	return 0;
+}
+
+int send_slot_full( struct buffer_s *pbuf ) {
+	if (add_to_buffer( pbuf, (unsigned char*)slothtml, strlen(slothtml) ) < 0)  {
+		log_message( LOG_ERROR, "send_slot_full error." );
+		return -1;
+	}
+	return 0;
+}

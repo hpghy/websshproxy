@@ -24,8 +24,6 @@ static unsigned int work_idx;
 
 static void worker_signal( int signo )
 {
-	//fprintf( stderr, "worker:%d receive signal.\n", getpid() );
-
 	switch ( signo ) {
 	case SIGHUP:
 		//fprintf( stderr, "worker:%d receive SIGHUP.\n", getpid() );
@@ -69,14 +67,12 @@ static void work_main( unsigned int index )
 
 	//init epoll
 	if ( ( epfd = init_epoll() ) < 0 ) {
-		//fprintf( stderr, "epoll_create error.\n" );
 		log_message( LOG_ERROR, "epoll_create error." );
 		return;
 	}
 
 	//add fd into epoll
 	if ( init_conns_array( epfd ) < 0 ) {
-		//fprintf( stderr, "init_conns_array() error.\n" );
 		log_message( LOG_ERROR, "init_conns_array() error." );
 		return;
 	}
@@ -84,12 +80,10 @@ static void work_main( unsigned int index )
 	while ( TRUE ) {
 		ret = epoll_process_event();
 		if ( ret < 0 ) {
-			//fprintf( stderr, "epoll_process_event error.\n" );
 			log_message( LOG_ERROR, "epoll_process_event error." );
 		}
 	}
 
-	//fprintf( stderr, "work:%d go to dead.\n", getpid() );
 	log_message( LOG_ERROR, "work:%d going to dead.\n", getpid() );
 }
 
@@ -150,7 +144,7 @@ void monitor_workers()
 				log_message( LOG_ERROR, "create process %d error.", i );
 				return;
 			}
-			log_message( LOG_NOTICE, "create worker:%d.\n", wprocess_ptr[i].pid );
+			log_message( LOG_DEBUG, "create worker:%d.\n", wprocess_ptr[i].pid );
 			wprocess_ptr[i].status = T_WAITING;
 		}
 	}
@@ -176,12 +170,10 @@ int create_works_processes( unsigned int works )
 		wprocess_ptr[i].status = T_WAITING;
 		wprocess_ptr[i].pid = make_process( i );
 		if ( wprocess_ptr[i].pid < 0 ) {
-			//fprintf( stderr, "create process %d error.\n", i );
 			log_message( LOG_ERROR, "create process %d error.\n", i );
 			return -1;
 		}
-		//fprintf( stderr, "create worker:%d.\n", wprocess_ptr[i].pid );
-		log_message( LOG_NOTICE, "create worker:%d.\n", wprocess_ptr[i].pid );
+		log_message( LOG_DEBUG, "create worker:%d.\n", wprocess_ptr[i].pid );
 	}
 
 	return TRUE;

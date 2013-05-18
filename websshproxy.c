@@ -36,10 +36,10 @@ static void sig_handle( int signal )
 		receive_sigint = TRUE;
 		break;
 
-	case SIGCHLD:		//子进程已经消亡
+	case SIGCHLD:		//子进程已经消亡,问题在于，我不知道为什么会消亡 
 		pid = wait( &status );
 		work_terminated( pid );
-		log_message( LOG_NOTICE, "work:%d terminated.", pid );
+		log_message( LOG_DEBUG, "work:%d terminated.", pid );
 		break;
 	}
 	return;
@@ -77,11 +77,11 @@ static void main_loop()
 		if ( receive_sighup == TRUE || log_file_large() == TRUE ) {
 			truncate_log_file();
 			receive_sighup = FALSE;
-			log_message( LOG_NOTICE, "truncate log file." );
+			log_message( LOG_DEBUG, "truncate log file." );
 		}
 		sleep(20);
 	}
-	log_message( LOG_NOTICE, "master process received exit signal." );
+	log_message( LOG_DEBUG, "master process received exit signal." );
 }
 
 int main( int argc, char **argv )
@@ -120,7 +120,6 @@ int main( int argc, char **argv )
 		}
 	}
 
-
 	/*
    	 * parse configuration file
 	 */
@@ -137,20 +136,18 @@ int main( int argc, char **argv )
 				fprintf( stderr, "Could not create log file.\n" );
 				return 0;
 			}
-			//print_store_logs();
 		}
 		makedaemon();
 	}
 	else {
 		//debug mode
-		set_log_level( LOG_DEBUG );
+		set_log_level( LOG_CONN );
 		fprintf( stderr, "debug mode...\n" );
 	}
 
 	//create pidfile
 	if ( config.pidfile ) {
 		if ( pidfile_create( config.pidfile ) < 0 ) {
-			//fprintf( stderr, "Could not create PID file.\n" );
 			log_message( LOG_ERROR, "create pidfile:%s failly.", config.pidfile );
 			return 0;
 		}
@@ -172,7 +169,6 @@ int main( int argc, char **argv )
 
 	//create works processes
 	if ( create_works_processes( config.works ) < 0 ) {
-		//fprintf( stderr, "Create works processes error.\n" );
 		log_message( LOG_ERROR, "Create works processes error." );
 		return 0;
 	}
@@ -203,11 +199,11 @@ int main( int argc, char **argv )
 
 	//remove pid file
 	if ( unlink( config.pidfile ) < 0 ) {
-		log_message( LOG_NOTICE, "Could not remove pid file." );
+		log_message( LOG_DEBUG, "Could not remove pid file." );
 	}
 	
 	//close log file
-	log_message( LOG_NOTICE, "master process going to dead." );
+	log_message( LOG_DEBUG, "master process going to dead." );
 
 	close_log_file();
 

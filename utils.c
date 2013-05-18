@@ -7,7 +7,7 @@ static char *syslog_level[] = {
 	NULL,
 	"LOG_ERROR",
 	"LOG_WARNING",
-	"LOG_NOTICE",
+	"LOG_CONN",
 	"LOG_DEBUG"
 };
 
@@ -125,34 +125,38 @@ void log_message(int level, char *fmt, ...) {
     char time_string[TIME_LENGTH];
     char str[STRING_LENGTH];
 
-    if ( level > log_level || log_file_fd > -1 )
+    if ( level > log_level )
         return;
 
     va_start(args, fmt);
 
+	/*
     if ( log_file_fd < 0 ) {
 		snprintf( str, sizeof(str)-1, "%ld:", (long int)getpid() );
         vsnprintf(str+strlen(str), sizeof(str)-strlen(str)-1, fmt, args);
         va_end(args);
         printf( "%s\n", str );
         return;
-    }
+    }*/
 
     nowtime = time(NULL);
     memset( time_string, 0, sizeof(time_string) );
     strftime(time_string, TIME_LENGTH, "%b %d %H:%M:%S",
          localtime(&nowtime));
-	 memset( str, 0, sizeof(str) );
+	memset( str, 0, sizeof(str) );
     snprintf(str, STRING_LENGTH, "%-9s %s [%ld]: ", syslog_level[level],
          time_string, (long int) getpid());
+	vsnprintf(str+strlen(str), STRING_LENGTH, fmt, args);
+	strcat( str, "\n" );
 
-    assert(log_file_fd >= 0);
+	if ( log_file_fd < 0 ) {
+		printf( "%s", str );
+	}
+	else {
+		write(log_file_fd, str, strlen(str) );
+	}
 
-    vsnprintf(str+strlen(str), STRING_LENGTH, fmt, args);
-    strcat( str, "\n" );
-    write(log_file_fd, str, strlen(str) );
-
-    va_end(args);
+	va_end(args);
 }
 
 int read_config_file( config_t * pconfig )
@@ -184,7 +188,7 @@ int read_config_file( config_t * pconfig )
 		}
 
 		else if ( strcasecmp( key, "loglevel" ) == 0 ) {
-			for ( i = LOG_ERROR; i <= LOG_NOTICE; ++ i ) {
+			for ( i = LOG_ERROR; i <= LOG_DEBUG; ++ i ) {
 				if ( 0 == strcmp( value, syslog_level[i] ) ) {
 					pconfig->loglevel = i;
 				}
@@ -204,6 +208,11 @@ int read_config_file( config_t * pconfig )
 		else if ( strcasecmp( key, "bind" ) == 0 ) {
 			pconfig->ips[pconfig->bindcnt++] = safestrdup( value );
 		}
+		/*
+		else if ( strcasecmp( key, "errorhtml" ) == 0 ) {
+			trimfilepath( value );
+			pconfig->errorhtml = safestrdup( value );
+		}*/
 		
 		else {
 			fprintf( stderr, "unkown configuration string:%s.\n", key );
