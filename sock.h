@@ -22,7 +22,7 @@ typedef int ( *EPOLLHANDLE )( struct conn_s * );
 
 struct listenfd_s {
 	int		fd;
-	struct sockaddr		*addr;
+	struct sockaddr_in	addr;
 	socklen_t			addrlen;
 };
 typedef struct listenfd_s listenfd_t;

@@ -20,50 +20,49 @@ static unsigned int wprocesses;
 /*
  * current work process index in wprocess_ptr array
  */
-static unsigned int work_idx;
+//static unsigned int work_idx;
 
 static void worker_signal( int signo )
 {
 	switch ( signo ) {
 	case SIGHUP:
-		//fprintf( stderr, "worker:%d receive SIGHUP.\n", getpid() );
 		log_message( LOG_DEBUG, "worker:%d receive SIGHUP.", getpid() );
 		break;
 
 	case SIGTERM:
-		//fprintf( stderr, "worker:%d receive SIGTERM.\n", getpid() );
 		log_message( LOG_DEBUG, "worker:%d receive SIGTERM.", getpid() );
 		break;
 
 	case SIGINT:
-		//fprintf( stderr, "worker:%d receive SIGHUP.\n", getpid() );
 		log_message( LOG_DEBUG, "worker:%d receive SIGHUP.", getpid() );
 		break;
 
 	case SIGPIPE:
-		//fprintf( stderr, "worker:%d receive SIGPIPE.\n", getpid() );
 		log_message( LOG_DEBUG, "worker:%d receive SIGPIPE.", getpid() );
 		break;
 
 	default:
-		///fprintf( stderr, "worker:%d receive signal:%d.\n", getpid(), signo );
 		log_message( LOG_DEBUG, "worker:%d receive default signal:%d.", getpid(), signo );
 		return;
 	}
 
 	log_message( LOG_DEBUG, "worker:%d exit after signal_handle", getpid() );
-	exit(0);
+	exit(0);			//退出，但是没有清理内存
 }
 
 /*
  * work process main loop
  *
  */
-static void work_main( unsigned int index ) 
+static void work_main( unsigned int index )		//index: no use
 {
-	work_idx = index;
+	//work_idx = index;		//
 	int	epfd;
 	int ret;
+
+	//清理父进程分配的动态空间
+	//子进程继承了父进程的wprocess_ptr
+	safefree( wprocess_ptr );
 
 	//init epoll
 	if ( ( epfd = init_epoll() ) < 0 ) {
@@ -83,6 +82,8 @@ static void work_main( unsigned int index )
 			log_message( LOG_ERROR, "epoll_process_event error." );
 		}
 	}
+
+	//清理所有连接的read_buffer/write_buffer
 
 	log_message( LOG_ERROR, "work:%d going to dead.\n", getpid() );
 }
@@ -179,7 +180,9 @@ int create_works_processes( unsigned int works )
 	return TRUE;
 }
 
-
+/**
+ * invoked by master process
+ */
 void kill_works_processes()
 {
 	int i;
@@ -188,5 +191,5 @@ void kill_works_processes()
 			kill( wprocess_ptr[i].pid, SIGTERM );
 	}
 	wprocesses = 0;
-	free( wprocess_ptr );
+	safefree( wprocess_ptr );		//free 
 }

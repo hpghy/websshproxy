@@ -1,11 +1,12 @@
-/*
- * buffer.c
- * 
- */
-
 #include "buffer.h"
 #include "heap.h"
 #include "utils.h"
+
+/**
+ *  全局变量
+ */
+int		g_errno;	// 1:normal, 0: closed, -1: error
+int		g_linef = 0;		//1: buffer contains at least one lines;
 
 static char errorhtml[] = "<html>\n\
 								<head>\n\
@@ -28,268 +29,136 @@ static char slothtml[] = "<html>\n\
 							</body>\n\
 					   </html>";
 
- /**
- *	全局变量
- */
-int	g_errno = 0;		//0: close read or write; -1: error,close connection; 1: normal
-int	g_linef = 0;		//1: buffer contains at least one lines;
+buffer_t*	new_buffer() {
+	buffer_t	*pbuf;
+	block_t		*pb;
 
-/*
- * Take a string of data and a length and make a new line which can be added
- * to the buffer. The data IS copied, so make sure if you allocated your
- * data buffer on the heap, delete it because you now have TWO copies.
- */
-static struct bufline_s *
-makenewline(unsigned char *data, size_t length)
-{
-	struct bufline_s *newline;
-
-	assert(data != NULL);
-	assert(length > 0);
-
-	if (!(newline = safemalloc(sizeof(struct bufline_s))))
-		return NULL;
-
-	if (!(newline->string = safemalloc(length))) {
-		safefree(newline);
+	pbuf = (buffer_t*)safemalloc( sizeof(buffer_t) );
+	if ( NULL == pbuf ) {
+		log_message( LOG_ERROR, "safemalloc return NULL" );
 		return NULL;
 	}
-
-	memcpy(newline->string, data, length);
-
-	newline->next = NULL;
-	newline->length = length;
-
-	/* Position our "read" pointer at the beginning of the data */
-	newline->pos = 0;
-
-	return newline;
-}
-
-/*
- * Free the allocated buffer line
- */
-static void
-free_line(struct bufline_s *line)
-{
-	assert(line != NULL);
-
-	if (!line)
-		return;
-
-	if (line->string)
-		safefree(line->string);
-
-	safefree(line);
-}
-
-/*
- * Create a new buffer
- */
-struct buffer_s *
-new_buffer(void)
-{
-	struct buffer_s *buffptr;
-
-	if (!(buffptr = safemalloc(sizeof(struct buffer_s))))
+	pb = (block_t*)safemalloc( sizeof(block_t) );
+	if ( NULL == pb ) {
+		log_message( LOG_ERROR, "safemalloc return NULL" );
 		return NULL;
-
-	/*
-	 * Since the buffer is initially empty, set the HEAD and TAIL
-	 * pointers to NULL since they can't possibly point anywhere at the
-	 * moment.
-	 */
-	BUFFER_HEAD(buffptr) = BUFFER_TAIL(buffptr) = NULL;
-	buffptr->size = 0;
-
-	return buffptr;
-}
-
-/*
- * Delete all the lines in the buffer and the buffer itself
- */
-void
-delete_buffer(struct buffer_s *buffptr)
-{
-	struct bufline_s *next;
-
-	assert(buffptr != NULL);
-
-	while (BUFFER_HEAD(buffptr)) {
-		next = BUFFER_HEAD(buffptr)->next;
-		free_line(BUFFER_HEAD(buffptr));
-		BUFFER_HEAD(buffptr) = next;
 	}
+	pb->next = NULL;
+	pb->pos = pb->end = 0;
 
-	safefree(buffptr);
+	pbuf->head = pbuf->tail = pb;
+	pbuf->size = 0;
+	pbuf->blks = 1;
+
+	return pbuf;
 }
 
-/*
- * Return the current size of the buffer.
- */
-size_t buffer_size(struct buffer_s *buffptr)
-{
-	return buffptr->size;
+void	delete_buffer( buffer_t *pbuf ) {
+	block_t		*pb;
+
+	pb = pbuf->head;
+	while ( NULL != pb ) {
+		pbuf->head = pb->next;
+
+		pb->next = NULL;
+		safefree(pb);
+		pb = pbuf->head;
+	}
+	pbuf->head = pbuf->tail = NULL;
+	pbuf->size = 0;
+	pbuf->blks = 0;
 }
 
-/*
- * Push a new line on to the end of the buffer.
- */
-int
-add_to_buffer(struct buffer_s *buffptr, unsigned char *data, size_t length)
-{
-	struct bufline_s *newline;
+int	add_block( buffer_t *pbuf ) {
+	block_t		*npb;
 
-	assert(buffptr != NULL);
-	assert(data != NULL);
-	assert(length > 0);
-
-	/*
-	 * Sanity check here. A buffer with a non-NULL head pointer must
-	 * have a size greater than zero, and vice-versa.
-	 */
-	if (BUFFER_HEAD(buffptr) == NULL)
-		assert(buffptr->size == 0);
-	else
-		assert(buffptr->size > 0);
-
-	/*
-	 * Make a new line so we can add it to the buffer.
-	 */
-	if ( NULL == (newline = makenewline((unsigned char*)data, length)) )
+	npb = (block_t*)safemalloc( sizeof(block_t) );
+	if ( NULL == npb ) {
+		log_message( LOG_ERROR, "safemalloc return NULL" );
 		return -1;
-
-	if (buffptr->size == 0)
-		BUFFER_HEAD(buffptr) = BUFFER_TAIL(buffptr) = newline;
-	else {
-		BUFFER_TAIL(buffptr)->next = newline;
-		BUFFER_TAIL(buffptr) = newline;
 	}
+	npb->next = NULL;
+	npb->pos = npb->end = 0;
 
-	buffptr->size += length;
+	if ( NULL == pbuf->tail ) {
+		pbuf->tail = pbuf->head = npb;
+	}
+	else {
+		pbuf->tail->next = npb;
+		pbuf->tail = npb;
+	}
+	++ pbuf->blks;
 
 	return 0;
 }
 
-/*
- * Remove the first line from the top of the buffer
+/**
+ * 需要优化，可以把空闲的块插入pbuf末尾
  */
-static struct bufline_s *
-remove_from_buffer(struct buffer_s *buffptr)
-{
-	struct bufline_s *line;
+void delete_head( buffer_t *pbuf ) {
+	block_t		*pb = pbuf->head;
+	if ( NULL == pb )
+		return;
 
-	assert(buffptr != NULL);
-	assert(BUFFER_HEAD(buffptr) != NULL);
-
-	line = BUFFER_HEAD(buffptr);
-	BUFFER_HEAD(buffptr) = line->next;
-
-	buffptr->size -= line->length;
-
-	return line;
+	pb->pos = pb->end = 0;
+	if ( NULL == pb->next ) {		//最后一个块
+		pbuf->size = 0;
+	}
+	else {
+		pbuf->head = pb->next;
+		pbuf->size -= BLOCK_SENDATA(pb);
+		pb->next = NULL;
+		if ( pbuf->blks < BLOCKMAXCNT ) {
+			pbuf->tail->next = pb;
+			pbuf->tail = pb;
+		}
+		else {
+			safefree(pb);
+			-- pbuf->blks;
+		}
+	}
 }
 
-/*
- * 返回读取的数据大小, g_errno设置错误提示
+/**
+ * 非阻塞读取数据
+ * return 读取的总数据,错误设置在g_errorno上
  */
-ssize_t read_buffer(int fd, struct buffer_s * buffptr)
-{
-	ssize_t total;
-	ssize_t bytesin;
-	unsigned char buffer[READ_BUFFER_SIZE];
+ssize_t read_buffer( int fd, buffer_t *pbuf ) {
 
 	assert(fd >= 0);
-	assert(buffptr != NULL);
+	assert( pbuf != NULL);
 
-	g_errno = 1;		//没有错误 
-	/*
-	 * Don't allow the buffer to grow larger than MAXBUFFSIZE
-	 */
-	if (buffptr->size >= MAXBUFFSIZE)
-		return 0;
+	block_t		*pb = NULL;
+	int			n, total, size;
+
 	total = 0;
-	memset( buffer, 0, sizeof(buffer) );
+	g_errno = 1;				//无错误
 
 NONREAD:
-	bytesin = read(fd, buffer, READ_BUFFER_SIZE);
-
-	if (bytesin > 0) {
-		if (add_to_buffer(buffptr, buffer, bytesin) < 0) {
-			log_message( LOG_ERROR, "readbuff, add_to_buffer error." );
-			g_errno = -1;
-			return 0;
+	pb = pbuf->tail;
+	if ( NULL == pb || BLOCK_FULL(pb) ) {
+		if ( add_block( pbuf ) < 0 ) {
+			return -1;
 		}
-		total += bytesin;
-		if ( bytesin == READ_BUFFER_SIZE ) {		//缓冲区中还有数据
-			goto NONREAD;			
-	 	}	
-	} 
-	else {
-		if (bytesin == 0) {
-			/* connection was closed by client */
-			log_message( LOG_ERROR, "read 0 from fd[%d].", fd );
-			g_errno = 0;
-		} 
-		else {
-			switch (errno) {
-#ifdef EWOULDBLOCK
-			case EWOULDBLOCK:
-#else
-#  ifdef EAGAIN
-			case EAGAIN:
-#  endif
-#endif
-			case EINTR:
-				g_errno = 1;		//不算是错误
-
-			default:
-				log_message(LOG_ERROR, "readbuff: recv() error \"%s\" on file descriptor %d", strerror(errno), fd);
-				g_errno = -2;
-			}
-		}
+		pb = pbuf->tail;
 	}
+	size = BLOCK_REMAIN(pb);	//空闲位置是 [end, BLOCK_DATA]
+	n = read( fd, BLOCK_READADDR(pb), size );
+	log_message( LOG_DEBUG, "read %d bytes from fd[%d]", n, fd );
 
-	return total;
-}
-
-/*
- *  返回发送的总数据大小,错误设置在g_errno中
- */
-ssize_t write_buffer(int fd, struct buffer_s * buffptr)
-{
-	ssize_t total, n,  bytessent;
-	struct bufline_s *line;
-
-	assert(fd >= 0);
-	assert(buffptr != NULL);
-
-	g_errno = 1;
-	if (buffptr->size == 0)
-		return 0;
-	total = 0;
-
-NONWRITE:
-	/* Sanity check. It would be bad to be using a NULL pointer! */
-	line = BUFFER_HEAD(buffptr);
-	if ( NULL == line ) {
-		return total;
-	}
-	
-	n = line->length - line->pos;
-	bytessent = send(fd, line->string + line->pos, n, MSG_NOSIGNAL);
-
-	if (bytessent >= 0) {
-		/* bytes sent, adjust buffer */
-		line->pos += bytessent;
-		total += bytessent;
-		if (line->pos == line->length) {
-			free_line(remove_from_buffer(buffptr));
-			if ( BUFFER_HEAD(buffptr) != NULL )		//如果还有数据继续发送
-				goto NONWRITE;
-		}
+	if ( n > 0 ) {
 		g_errno = 1;
-	} 
+		total += n;
+		pb->end += n;
+		pbuf->size += n;		//待发送数据大小
+
+		if ( n == size ) {
+			goto NONREAD;		//epoll的ET mode
+		}
+	}
+	else if ( 0 == n ) {		//已经关闭读
+		g_errno = 0;
+	}
 	else {
 		switch (errno) {
 #ifdef EWOULDBLOCK
@@ -300,25 +169,90 @@ NONWRITE:
 #  endif
 #endif
 		case EINTR:
-			g_errno = 1;
+			g_errno = 1;		//不是错误，本次读取结束，等待下次事件
+			break;
 
-		case ENOBUFS:
-		case ENOMEM:
-			log_message(LOG_ERROR,
-				    "writebuff: write() error [NOBUFS/NOMEM] \"%s\" on file descriptor %d",
-				    strerror(errno), fd);
 		default:
-			log_message(LOG_ERROR,
-				    "writebuff: write() error \"%s\" on file descriptor %d",
-				    strerror(errno), fd); 
-			g_errno = -2;
+			g_errno = -1;
+			log_message( LOG_ERROR,	"readbuff: recv() error \"%s\" on file descriptor %d",  strerror(errno), fd);
 		}
 	}
 
 	return total;
 }
 
-static void strremove( char *buffer, int start, int n, int size )
+/**
+ * 非阻塞写,从第一个block到pos位置
+ * return 发送的总数据量
+ */
+ssize_t write_buffer( int fd, buffer_t *pbuf ) {
+	
+	assert(fd >= 0);
+	assert( pbuf != NULL);
+
+	block_t		*pb = NULL;
+	int			n, total, size;
+	
+	total = 0;
+	g_errno = 1;
+
+NONWRITE:
+	if ( 0 == pbuf->size )			//结束发送
+		return total;
+	pb = BUFFER_HEAD(pbuf);
+	if ( NULL == pb ) {
+		log_message( LOG_ERROR, "head = NULL, but remain size:%d", pbuf->size );
+		return total;		
+	}
+	if ( 0 == BLOCK_SENDATA(pb) ) {	//块没有数据发了
+		delete_head( pbuf );		
+		goto NONWRITE;
+	}
+	size = BLOCK_SENDATA(pb);
+	n = send( fd, BLOCK_SENDADDR(pb), size, 0 );
+	log_message( LOG_DEBUG, "send %d bytes to fd[%d]", n, fd );
+
+	if ( n >= 0 ) {
+		g_errno = 1;
+		pbuf->size -= n;
+		pb->pos += n;
+		total += n;
+		
+		if ( n == size ) {			//块数据发送完,其实不应该删除，判断有没有满
+			delete_head( pbuf );		
+			goto NONWRITE;			//et mode
+		}
+	}
+	else {
+		switch (errno) {
+#ifdef EWOULDBLOCK
+		case EWOULDBLOCK:
+#else
+#  ifdef EAGAIN
+		case EAGAIN:
+#  endif
+#endif
+		case EINTR:
+			g_errno = 1;			//没有错误，等待下一次事件
+			break;
+
+		case ENOBUFS:
+		case ENOMEM:
+			log_message(LOG_ERROR,  "writebuff: write() error [NOBUFS/NOMEM] \"%s\" on file descriptor %d",  strerror(errno), fd);
+		default:
+			log_message(LOG_ERROR, "writebuff: write() error \"%s\" on file descriptor %d", strerror(errno), fd); 
+			g_errno = -1;
+		}
+	}
+
+	return total;
+}
+
+/**
+ * 把start开始的n个字符删除
+ * 字符总长度为size
+ */
+void strremove( char *buffer, int start, int n, int size )
 {
 	int i;
 	for ( i = start+n; i < size; ++ i ) {
@@ -327,7 +261,7 @@ static void strremove( char *buffer, int start, int n, int size )
 	buffer[i-n] = 0;
 }
 
-static const char* strnstr( const char *src, size_t size1, const char *pattern, size_t size2 ) {
+char* strnstr( char *src, size_t size1, char *pattern, size_t size2 ) {
 	if ( size2 > size1 )
 		return NULL;
 	int i;
@@ -339,92 +273,203 @@ static const char* strnstr( const char *src, size_t size1, const char *pattern, 
 }
 
 /**
- * 判断缓存中是否有一行数据,都是http请求才调用这个函数
+ *  调用时已经确保pblk中包含请求行,可以不含有HTTP/1.1 
+ *  0: 表示ip抽取成功
+ *  <0: 表示抽取失败
  */
-int is_contain_line( struct buffer_s *pbuf ) {
-	struct bufline_s	*pline;
-	pline = BUFFER_HEAD(pbuf);
-	while ( NULL != pline ) {
-		if ( NULL != memchr( pline->string+pline->pos, '\n', pline->length ) )
-			return 1;
-		pline = pline->next;
+int __extract_ip( buffer_t *pbuf, block_t *pblk, char *ip, size_t size, uint16_t *port ) {
+	char	*pS, *p, *tp;
+	int		n;
+	pS = strnstr( BLOCK_SENDADDR(pblk), BLOCK_SENDATA(pblk), "GET", 3 );
+	if ( NULL == pS )
+		pS = strnstr( BLOCK_SENDADDR(pblk), BLOCK_SENDATA(pblk), "POST", 4 );
+	if ( NULL == pS )
+		return -1;
+
+	p = memchr( pS, '/', BLOCK_SENDATA(pblk)-(int)(pS-BLOCK_SENDADDR(pblk)) );
+	if ( NULL == p )
+		return -2;
+	tp = memchr( p, ':', BLOCK_SENDATA(pblk)-(int)(p-BLOCK_SENDADDR(pblk)) );
+	if ( NULL == tp )
+		return -2;
+
+	memset( ip, 0, size );
+	strncpy( ip, p+1, (tp-p)-1 );
+
+	//判断:之前的是否是http的字段还是ip
+	if ( NULL != strstr(ip, "HTTP") ) {
+		//http 的字段,没有vm:port	
+		*port = 0;
+		memset( ip, 0, sizeof(ip) );
+		return 1; 
 	}
+
+	if ( NULL != port ) {
+		*port = 0;
+		for ( ++tp; *tp <= '9' && *tp >= '0'; ++ tp ) {
+			*port = *port * 10 + ( *tp - '0' );
+		}
+	}
+		
+	//rewrite ...
+	if ( '/' == *tp )
+		++ tp;
+	n = tp-p-1;
+	strremove( pblk->data, p+1-pblk->data, n, pblk->end );	//数据向前移动n位
+	log_message( LOG_DEBUG, "remove vm:port %d bytes", n );
+	pblk->end -= n;
+	pbuf->size -=n;
+
+
 	return 0;
 }
 
 /**
-  * 这段代码一直有一个问题，我一直没有修正
-  * 需要对buffer_s重新封装一下，方便遍历没一个字符
-  * return 1: ok, 0: not contain a http line, -1: format error
-  */
-int extract_ip_buffer( struct buffer_s *bufferptr, char *ip, ssize_t length, uint16_t *port )
-{
-	struct bufline_s * lines;
-	const char *pGet, *pPost, *pHttp, *p, *q;
+ *	从url中抽取ip和端口,有各种情况需要分析
+ *  0表示抽取成功, 
+ *  -1表示不包含请求行
+ *  -2表示出错(含有HTTP)
+ */
+int extract_ip_buffer( buffer_t *pbuf, char *ip, size_t size, uint16_t *port ) {
+	block_t	*pb;
+	int		bytes;
+	char	*pE;
+	block_t		*pnb;
+	pb = BUFFER_HEAD(pbuf);
 
-	// 2kb size, i think it's enough to contain a http request
-	// test!
-	lines = BUFFER_TAIL( bufferptr );
-	//pGet = strstr( (char*)lines->string, "GET" );
-	pGet = strnstr( (char*)lines->string, lines->length, "GET", 3 );
-	if ( NULL == pGet ) {
-		//pPost = strstr( (char*)lines->string, "POST" );
-		pPost = strnstr( (char*)lines->string, lines->length, "POST", 4 );
-		if ( NULL == pPost ) {
-			return 0;
+	//第一个块含有请求行
+	if (  NULL != strnstr( BLOCK_SENDADDR(pb), BLOCK_SENDATA(pb), "HTTP", 4 ) ) {
+		return __extract_ip( pbuf, pb, ip, size, port );	
+	}
+	else {
+
+		pnb = pb->next;
+		if ( NULL == pnb )
+			return -1;
+		if ( NULL != (pE=strnstr( BLOCK_SENDADDR(pnb), BLOCK_SENDATA(pnb), "HTTP", 4))){
+			char	*p1, *p2;
+			p1 = memchr( BLOCK_SENDADDR(pnb), '/', pE - BLOCK_SENDADDR(pnb) );
+
+			//如果vm:port有可能横跨两个block
+			if ( NULL == p1 ) {
+				goto MERGEBLOCK;
+			}
+			p2 = memchr( p1, ':', pE-p1 );
+			if ( NULL == p2 ) {
+				goto MERGEBLOCK;
+			}
+
+			//现在可以确定，vm:port在pnb块里面
+			return  __extract_ip( pbuf, pnb, ip, size, port );
 		}
-		pGet = pPost;
-	}
 
-	//pHttp = strstr( (char*)lines->string, "HTTP" );
-	pHttp = strnstr( (char*)lines->string, lines->length, "HTTP", 4 );
-	if ( NULL == pHttp ) {
-		return 0;
-	} 
-	
-	p = strchr( pGet, '/' );	
-	q = strchr( p, ':' );
-	if ( NULL == p || NULL == q )
+		int last = pb->end;
+		//请求行只可能在第一快或是第二个快间.(1024的大小)
+		if ( ( 'H' == pb->data[last-1] && 0 == strncmp( BLOCK_SENDADDR(pnb), "TTP", 3 ) ) 
+			|| ( 'H' == pb->data[last-2] && 'T' == pb->data[last-1] && 
+				0 == strncmp( BLOCK_SENDADDR(pnb), "TP", 2) )
+			|| ( 0 == strncmp( pb->data+last-3, "HTT", 3 ) && 'P' == pnb->data[pnb->pos] )
+		   ) {
+			return __extract_ip( pbuf, pb, ip, size, port );
+		}
+
 		return -1;
-
-	strncpy( ip, p+1, q-p-1 );
-	ip[ q-p-1 ] = 0;	
-
-	if ( NULL == port )
-		return TRUE;
-	*port = 0;
-	for ( ++q; *q <= '9' && *q >= '0'; ++ q ) {
-		*port = *port * 10 + ( *q - '0' );
 	}
 
-	//rewrite url
-	int n, start;
-	n = q-p-1;
-	if ( *q == '/' )
-		++ n;
-	start = (unsigned char*)p - lines->string + 1;
-	strremove( (char*)lines->string, start, n, lines->length );
-	lines->length -= n;
-	bufferptr->size -= n;
+MERGEBLOCK:
+	log_message( LOG_DEBUG, "in mergeblock" );
+	bytes = BLOCK_SENDATA(pb)+ pE - BLOCK_SENDADDR(pnb);
+	if ( bytes <= BLOCK_MAXDATA ) {
+		block_t		*newb = (block_t*)safemalloc( sizeof(block_t) );
+		newb->pos = 0;
+		memcpy( newb->data, BLOCK_SENDADDR(pb), BLOCK_SENDATA(pb) );
+		newb->end = BLOCK_SENDATA(pb);
 
-	return TRUE;
-}	
+		memcpy( BLOCK_READADDR(newb), BLOCK_SENDADDR(pnb), pE-BLOCK_SENDADDR(pnb) );
+		newb->end += pE-BLOCK_SENDADDR(pnb);
+		pnb->pos += pE-BLOCK_SENDADDR(pnb);
+					
+		pbuf->head = newb;
+		newb->next = pnb;
+		safefree( pb );
+					
+		return __extract_ip( pbuf, newb, ip, size, port );
+	}
+	else {
+		log_message( LOG_ERROR, "vm:port between two block!" );
+		return -1;
+	}
+}
 
 /**
  *	为了简单，直接写死在代码里面好了
+ *  
  */
 int send_error_html( struct buffer_s *pbuf ) {
-	if (add_to_buffer( pbuf, (unsigned char*)errorhtml, strlen(errorhtml) ) < 0)  {
-		log_message( LOG_ERROR, "send_error_html error." );
-		return -1;
+	int	 len, rem;
+	block_t		*pb;
+
+	if ( NULL == BUFFER_TAIL(pbuf) ) {
+		if ( add_block(pbuf) < 0 ) {
+			log_message( LOG_ERROR, "send_error_html add_block error" );
+			return -1;
+		}
 	}
+
+	pb = pbuf->tail;
+	rem = BLOCK_REMAIN(pb);		
+	len = strlen(errorhtml);
+
+	if ( rem >= len ) {
+		memcpy( BLOCK_READADDR(pb), errorhtml, len );
+		pb->end += len;
+		pbuf->size += len;
+	}
+	else {
+		memcpy( BLOCK_READADDR(pb), errorhtml, rem );
+		pb->end += rem;
+		pbuf->size += rem;
+		
+		add_block( pbuf );
+		pb = pbuf->tail;
+		memcpy( BLOCK_READADDR(pb), errorhtml+rem, len-rem );
+		pb->end += len-rem;
+		pbuf->size += len-rem;
+	}
+
 	return 0;
 }
 
 int send_slot_full( struct buffer_s *pbuf ) {
-	if (add_to_buffer( pbuf, (unsigned char*)slothtml, strlen(slothtml) ) < 0)  {
-		log_message( LOG_ERROR, "send_slot_full error." );
-		return -1;
+	int	 len, rem;
+	block_t		*pb;
+
+	if ( NULL == BUFFER_TAIL(pbuf) ) {
+		if ( add_block(pbuf) < 0 ) {
+			log_message( LOG_ERROR, "send_error_html add_block error" );
+			return -1;
+		}
+	}
+
+	pb = pbuf->tail;
+	rem = BLOCK_REMAIN(pb);
+	len = strlen(slothtml);
+
+	if ( rem >= len ) {
+		memcpy( BLOCK_READADDR(pb), slothtml, len );
+		pb->end += len;
+		pbuf->size += len;
+	}
+	else {
+		memcpy( BLOCK_READADDR(pb), slothtml, rem );
+		pb->end += rem;
+		pbuf->size += rem;
+		
+		add_block( pbuf );
+		pb = pbuf->tail;
+		memcpy( BLOCK_READADDR(pb), slothtml+rem, len-rem );
+		pb->end += len-rem;
+		pbuf->size += len-rem;
 	}
 	return 0;
 }

@@ -25,7 +25,7 @@ debugging_calloc(size_t nmemb, size_t size, const char *file,
 	assert(size > 0);
 
 	ptr = calloc(nmemb, size);
-	//log_message( LOG_DEBUG, "{calloc: %p:%u x %u} %s:%lu", ptr, nmemb, size, file, line);
+	log_message( LOG_DEBUG, "{calloc: %p:%u x %u} %s:%lu", ptr, nmemb, size, file, line);
 
 	return ptr;
 }
@@ -38,7 +38,7 @@ debugging_malloc(size_t size, const char *file, unsigned long line)
 	assert(size > 0);
 
 	ptr = malloc(size);
-	//log_message( LOG_DEBUG, "{malloc: %p:%u} %s:%lu", ptr, size, file, line);
+	log_message( LOG_DEBUG, "{malloc: %p:%u} %s:%lu", ptr, size, file, line);
 
 	return ptr;
 }
@@ -58,7 +58,7 @@ debugging_realloc(void *ptr, size_t size, const char *file, unsigned long line)
 void
 debugging_free(void *ptr, const char *file, unsigned long line)
 {
-	//log_message( LOG_DEBUG, "{free: %p} %s:%lu", ptr, file, line);
+	log_message( LOG_DEBUG, "{free: %p} %s:%lu", ptr, file, line);
 
 	if (ptr != NULL)
 		free(ptr);

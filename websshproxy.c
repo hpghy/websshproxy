@@ -10,13 +10,12 @@
 #include "heap.h"
 
 #define  DEFAULT_CONFIG_FILE 	"/root/hp/etc/websshproxy.conf"
-#define  VERSION	"2.1-beta hp 2013.05.18"
+#define  VERSION	"2.2-beta hp 2013.05.30"
 
 unsigned int	receive_sighup = FALSE;		//clear log file
 unsigned int	receive_sigterm = FALSE;	//termination
 unsigned int	receive_sigint = FALSE;		//termination
 
-config_t config;
 
 static void sig_handle( int signal )
 {
@@ -87,11 +86,12 @@ static void main_loop()
 int main( int argc, char **argv )
 {
 	//process option
-	int optch;
+	int		optch, i;
 	unsigned int	daemon = TRUE;
+	config_t config;		
+	char	pidfile[256];
 
 	memset( &config, 0, sizeof(config_t) );
-	config.configfile = DEFAULT_CONFIG_FILE;	
 	config.works = 1;
 	config.loglevel = 2;
 	 
@@ -108,16 +108,16 @@ int main( int argc, char **argv )
 			break;
 		case 'c':
 			config.configfile = safestrdup(optarg);
-			if (!config.configfile) {
-				fprintf( stderr, "Could not allocate memory.\n" );
-				return 0;
-			}
 			break;
 		case 'h':
 		default:
 			display_usage();
 			return 0;
 		}
+	}
+
+	if ( NULL == config.configfile ) {
+		config.configfile = safestrdup(DEFAULT_CONFIG_FILE);
 	}
 
 	/*
@@ -129,7 +129,6 @@ int main( int argc, char **argv )
 	}
 
 	if ( TRUE == daemon ) {
-		//create log file and initializing log system
 		set_log_level( config.loglevel );
 		if ( config.logfile ) {
 			if ( open_log_file( config.logfile ) < 0 ) {
@@ -141,7 +140,8 @@ int main( int argc, char **argv )
 	}
 	else {
 		//debug mode
-		set_log_level( LOG_CONN );
+		//set_log_level( LOG_CONN );
+		set_log_level( config.loglevel );
 		fprintf( stderr, "debug mode...\n" );
 	}
 
@@ -166,6 +166,20 @@ int main( int argc, char **argv )
 	}
 	log_message( LOG_DEBUG, "open_listening_sockets OK." );
 
+
+	//在创建子进程前清理动态内存,子进程不会使用的
+	if ( NULL != config.configfile )
+		safefree(config.configfile);
+	if ( NULL != config.logfile )
+		safefree(config.logfile);
+	if ( NULL != config.pidfile ) {
+		memset( pidfile, 0, sizeof(pidfile) );
+		strcpy( pidfile, config.pidfile );
+		safefree(config.pidfile);
+	}
+	for ( i = 0; i < config.bindcnt; ++ i ) {
+		safefree( config.ips[i] );
+	}
 
 	//create works processes
 	if ( create_works_processes( config.works ) < 0 ) {
@@ -198,7 +212,7 @@ int main( int argc, char **argv )
 	close_listen_sockets();
 
 	//remove pid file
-	if ( unlink( config.pidfile ) < 0 ) {
+	if ( unlink( pidfile ) < 0 ) {
 		log_message( LOG_DEBUG, "Could not remove pid file." );
 	}
 	
@@ -206,8 +220,6 @@ int main( int argc, char **argv )
 	log_message( LOG_DEBUG, "master process going to dead." );
 
 	close_log_file();
-
-	//clear memory
 
 	return 0;
 }

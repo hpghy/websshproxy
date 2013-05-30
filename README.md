@@ -23,3 +23,16 @@
 1、修改conn_t字段，记录ip和端口号。
 2、修改extract_ip,和server_conn不为空的逻辑,判断当前server是否与url中的vm-ip匹配
 
+2013/05/29
+修改内容：
+1、修改accet error: invalid argument错误，初始化sockaddr_in 和 addrlen
+2、增加EPOLLONESHOT，删除EPOLLERR EPOLLHUP
+3、修改_extract_ip判断提取出来的ip是否是http字段（有可能已经抽取出IP了）
+4、delete_head不直接删除块，而是把块加入到末尾，避免频繁动态分配内存。
+5、内存泄漏不知道哪里修改
+
+2013/05/30:
+1、创建子进程，局部变量config/进程表 会发生内存泄漏
+	父进程分配的动态空间，子进程很容易就发生泄漏
+	子进程接受信号时，没有清空当前使用的动态内存
+2、进一步修改意向：子进程接受SIGTERM时如何清空内存再推出

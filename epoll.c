@@ -9,7 +9,7 @@
 
 #define EVENTLISTSIZE	1024
 static int	epfd;
-static struct epoll_event *event_list;
+static struct epoll_event event_list[EVENTLISTSIZE];
 
 int init_epoll() 
 {
@@ -19,11 +19,12 @@ int init_epoll()
 
 	//allocate evetn_list;
 	//hp: change future
+	/*
 	event_list = (struct epoll_event*)safemalloc( sizeof(struct epoll_event)*EVENTLISTSIZE );
 	if ( NULL == event_list ) {
 		log_message( LOG_ERROR, "malloc event_list error." );
 		return -1;
- 	}
+ 	}*/
 	return epfd;
 }
 
@@ -35,7 +36,7 @@ int epoll_add_connection( conn_t *pconn, uint32_t flag )
    	 * my experience: just set one!
 	 */
 	ev.data.ptr = pconn;
-	ev.events = flag | EPOLLET | EPOLLERR | EPOLLHUP;
+	ev.events = flag | EPOLLET | EPOLLONESHOT;
 
 	if ( epoll_ctl( epfd, EPOLL_CTL_ADD, pconn->fd, &ev ) < 0 ) {
 		log_message( LOG_ERROR, "epoll_ctl [fd:%d] error.", pconn->fd );
@@ -52,7 +53,7 @@ int epoll_mod_connection( conn_t *pconn, uint32_t flag )
    	 * my experience: just set one!
 	 */
 	ev.data.ptr = pconn;
-	ev.events = flag | EPOLLET | EPOLLERR | EPOLLHUP;
+	ev.events = flag | EPOLLET | EPOLLONESHOT;
 	
 	if ( epoll_ctl( epfd, EPOLL_CTL_MOD, pconn->fd, &ev ) < 0 ) {
 		log_message( LOG_ERROR, "epoll_ctl mod [fd:%d] error.", pconn->fd );
@@ -83,7 +84,7 @@ int epoll_process_event()
 
 	events = epoll_wait( epfd, event_list, EVENTLISTSIZE, -1 );
 	if ( events < 0 ) {
-		log_message( LOG_ERROR, "epoll_wait error." );
+		log_message( LOG_ERROR, "epoll_wait error:%s.", strerror(errno) );
 		return -1;
 	}
 	if ( 0 == events ) {

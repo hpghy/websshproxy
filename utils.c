@@ -13,8 +13,8 @@ static char *syslog_level[] = {
 	"LOG_DEBUG"
 };
 
-#define TIME_LENGTH 16
-#define STRING_LENGTH 800
+#define TIME_LENGTH		16
+#define STRING_LENGTH	2048
 
 /*
  * Global file descriptor for the log file
@@ -166,12 +166,12 @@ void log_message(int level, char *fmt, ...) {
 	va_end(args);
 }
 
-int read_config_file( config_t * pconfig )
+int read_config_file( struct config_s *pconfig )
 {
 	FILE *fcin;
 	char buff[150], key[50], value[100];
 	unsigned int size, i;
-	
+
 	fcin = fopen( pconfig->configfile, "r" );
 	if ( NULL == fcin ) {
 		fprintf( stderr, "fopen configfile:%s error:%s.\n", pconfig->configfile, strerror(errno) );
@@ -179,19 +179,18 @@ int read_config_file( config_t * pconfig )
 	}
 	
 	while ( fscanf( fcin, " %[^\n]", buff) != EOF ) {
-		//fprintf( stderr, "%s\n", buff );
 		if ( TRUE == iscomment(buff) ) {
 			continue;
 		}
 		sscanf( buff, "%s%s", key, value );
 		if ( strcasecmp( key, "logfile" ) == 0 ) {
 			trimfilepath( value );
-			pconfig->logfile = safestrdup( value );	
+			pconfig->logfile = safestrdup(value);
 		}
 		
 		else if ( strcasecmp( key, "pidfile" ) == 0 ) {
 			trimfilepath( value );
-			pconfig->pidfile = safestrdup( value );
+			pconfig->pidfile = safestrdup(value);
 		}
 
 		else if ( strcasecmp( key, "loglevel" ) == 0 ) {
@@ -213,7 +212,8 @@ int read_config_file( config_t * pconfig )
 		}
 
 		else if ( strcasecmp( key, "bind" ) == 0 ) {
-			pconfig->ips[pconfig->bindcnt++] = safestrdup( value );
+			//strncpy( pconfig->ips[pconfig->bindcnt++], value, strlen(value) );
+			pconfig->ips[pconfig->bindcnt++] = safestrdup(value);
 		}
 		/*
 		else if ( strcasecmp( key, "errorhtml" ) == 0 ) {
@@ -224,10 +224,12 @@ int read_config_file( config_t * pconfig )
 		else {
 			fprintf( stderr, "unkown configuration string:%s.\n", key );
 			log_message( LOG_WARNING, "unkown configuration string:%s", key );
+			fclose(fcin);
 			return -1;
 		}
 	}
-	
+
+	fclose( fcin );
 	return TRUE;
 }
 
@@ -340,5 +342,8 @@ void makedaemon(void)
 #endif
 */
 
+}
+
+void clear_config( config_t *pconfig) {
 }
 
